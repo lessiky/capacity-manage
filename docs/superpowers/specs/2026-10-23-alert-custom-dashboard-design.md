@@ -111,8 +111,8 @@ CREATE TABLE alert_dashboard_preference (
   date_mode    varchar(16) NOT NULL DEFAULT 'today',
   recent_days  int NOT NULL DEFAULT 7,
   sort_rules   jsonb NOT NULL DEFAULT '[{"field":"triggerAt","direction":"desc"}]'::jsonb,
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  updated_at   timestamptz NOT NULL DEFAULT now(),
+  created_at   timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_alert_dashboard_date_mode CHECK (date_mode IN ('today', 'recent_days')),
   CONSTRAINT chk_alert_dashboard_recent_days CHECK (recent_days BETWEEN 1 AND 365)
 );
@@ -256,7 +256,7 @@ CREATE TABLE alert_dashboard_preference (
   - 系统范围叠加数据权限。
   - 多值筛选与多字段排序结果正确。
   - 分页稳定，末级排序包含 `id desc`。
-- 路由测试：三个新接口注册在 `alert:view` 权限下。
+- 路由测试：四个新接口注册在 `alert:view` 权限下。
 
 ### 11.2 前端
 
