@@ -1355,6 +1355,7 @@ git commit -m "feat: route alert dashboard APIs"
 
 **Files:**
 - Create: `frontend/src/components/AlertDashboard.vue`
+- Create: `frontend/src/utils/alert.ts`
 - Modify: `frontend/src/views/Alerts.vue`
 - Modify: `testing/test_ui_menu_merge.py`
 
@@ -1365,6 +1366,7 @@ git commit -m "feat: route alert dashboard APIs"
   - `GET /api/v1/alerts/dashboard?page=&pageSize=`
   - `GET /api/v1/alerts/dashboard-options`
 - Produces:
+  - `frontend/src/utils/alert.ts` exports `levelTag`, `statusTag`, `statusLabel`, and `typeLabel`.
   - `AlertDashboard.vue` exposes `reload(): Promise<void>`.
   - Alerts page includes tab name `dashboard` and defaults to it.
 
@@ -1436,7 +1438,29 @@ pytest testing/test_ui_menu_merge.py::test_alert_center_contains_custom_dashboar
 
 Expected: FAIL because the tab and save control do not exist.
 
-- [ ] **Step 3: Create `AlertDashboard.vue`**
+- [ ] **Step 3: Extract shared alert display helpers**
+
+Create `frontend/src/utils/alert.ts`:
+
+```ts
+export function statusTag(s: string): string {
+  return ({ active: 'danger', processing: 'primary', recovered: 'success', closed: 'info' } as Record<string, string>)[s] || 'info'
+}
+
+export function statusLabel(s: string): string {
+  return ({ active: '活动', processing: '处理中', recovered: '已恢复', closed: '已关闭' } as Record<string, string>)[s] || s
+}
+
+export function typeLabel(t: string): string {
+  return ({ threshold: '阈值', missing: '缺数', collect_fail: '采集失败', anomaly: '异常值', ds_error: '数据源异常' } as Record<string, string>)[t] || t
+}
+
+export function levelTag(level: string): string {
+  return ({ p1: 'danger', p2: 'warning', p3: 'warning', p4: 'info' } as Record<string, string>)[level] || 'info'
+}
+```
+
+- [ ] **Step 4: Create `AlertDashboard.vue`**
 
 Create `frontend/src/components/AlertDashboard.vue`:
 
@@ -1529,6 +1553,7 @@ import { ArrowDown, ArrowUp, Delete, Plus, Refresh } from '@element-plus/icons-v
 import { ElMessage } from 'element-plus'
 import { http } from '@/api/http'
 import { fmtTs } from '@/utils/format'
+import { levelTag, statusLabel, statusTag, typeLabel } from '@/utils/alert'
 
 interface DashboardSortRule { field: string; direction: 'asc' | 'desc' }
 interface DashboardPreference {
@@ -1668,19 +1693,6 @@ async function save() {
   }
 }
 
-function statusTag(s: string) {
-  return ({ active: 'danger', processing: 'primary', recovered: 'success', closed: 'info' } as Record<string, string>)[s] || 'info'
-}
-function statusLabel(s: string) {
-  return ({ active: '活动', processing: '处理中', recovered: '已恢复', closed: '已关闭' } as Record<string, string>)[s] || s
-}
-function typeLabel(t: string) {
-  return ({ threshold: '阈值', missing: '缺数', collect_fail: '采集失败', anomaly: '异常值', ds_error: '数据源异常' } as Record<string, string>)[t] || t
-}
-function levelTag(level: string) {
-  return ({ p1: 'danger', p2: 'warning', p3: 'warning', p4: 'info' } as Record<string, string>)[level] || 'info'
-}
-
 onMounted(async () => {
   const [saved, options] = await Promise.all([
     http.get('/api/v1/alerts/dashboard-preference') as unknown as Promise<DashboardPreference>,
@@ -1705,12 +1717,13 @@ defineExpose({ reload })
 </style>
 ```
 
-- [ ] **Step 4: Wire the component into `Alerts.vue`**
+- [ ] **Step 5: Wire the component into `Alerts.vue`**
 
 Modify `frontend/src/views/Alerts.vue`:
 
 ```ts
 import AlertDashboard from '@/components/AlertDashboard.vue'
+import { levelTag, statusLabel, statusTag, typeLabel } from '@/utils/alert'
 
 const dashboardRef = ref<InstanceType<typeof AlertDashboard> | null>(null)
 const { activeTab: tab, onTabChange: updateTab } = useQueryTab(
@@ -1742,9 +1755,13 @@ function onTabReload() {
 }
 ```
 
+Remove the local `statusTag`, `statusLabel`, `typeLabel`, and `levelTag`
+functions from `Alerts.vue`; the existing `eventLabel` and `timelineType`
+functions remain local because the detail drawer owns them.
+
 Keep `onMounted(loadStats)` because the top statistic cards are shared by all tabs.
 
-- [ ] **Step 5: Run frontend type checking**
+- [ ] **Step 6: Run frontend type checking**
 
 Run:
 
@@ -1756,7 +1773,7 @@ Workdir: `frontend`
 
 Expected: PASS.
 
-- [ ] **Step 6: Run the browser test**
+- [ ] **Step 7: Run the browser test**
 
 Run:
 
@@ -1766,10 +1783,10 @@ pytest testing/test_ui_menu_merge.py::test_alert_center_contains_custom_dashboar
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add frontend/src/components/AlertDashboard.vue frontend/src/views/Alerts.vue testing/test_ui_menu_merge.py
+git add frontend/src/components/AlertDashboard.vue frontend/src/utils/alert.ts frontend/src/views/Alerts.vue testing/test_ui_menu_merge.py
 git commit -m "feat: add custom alert dashboard UI"
 ```
 
