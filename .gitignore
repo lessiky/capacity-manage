@@ -32,9 +32,14 @@ tmp/
 temp/
 .cache/
 .playwright-cli/
+output/
+testing/
+.superpowers/
+db/
 
 # Python
 __pycache__/
+.pytest_cache/
 *.pyc
 .venv/
 
