@@ -1,0 +1,42 @@
+id,script_id,version,content,checksum,active,file_ref,published_by,published_at,remark,created_at
+36,48,1,"import json
+import os
+import time
+
+
+def main():
+    params = json.loads(os.environ.get(""CAP_PARAMS"", ""{}""))
+    end = time.time() + 400
+    while time.time() < end:
+        time.sleep(1)
+    print(json.dumps([{""metric"": ""PERF_SB_TIMEOUT"", ""value"": 1.0, ""unit"": ""%""}]))
+
+
+if __name__ == ""__main__"":
+    main()
+",5a61e4256c69d2d73591cadaa16088f21d8b0e40dc84363586f843ee5797b2fe,t,"",admin,2026-10-16 15:01:38.049073+08,v1,2026-10-16 15:01:38.049297+08
+37,49,1,"import json
+import os
+
+
+def main():
+    params = json.loads(os.environ.get(""CAP_PARAMS"", ""{}""))
+    x = bytes(1100 * 1024 * 1024)
+    print(json.dumps([{""metric"": ""PERF_SB_MEM"", ""value"": 1.0, ""unit"": ""%""}]))
+
+
+if __name__ == ""__main__"":
+    main()
+",1acaddc14bd6f2132d41cf68a2e6baee41f2d6bfd05b8c6806acd507f05fd4ba,t,"",admin,2026-10-16 15:01:38.096684+08,v1,2026-10-16 15:01:38.09694+08
+38,50,1,"import socket
+import json
+import os
+
+
+def main():
+    print(json.dumps([{""metric"": ""PERF_SB_NET"", ""value"": 1.0, ""unit"": ""%""}]))
+
+
+if __name__ == ""__main__"":
+    main()
+",6c521d091b7f7fefc9cdaea8b16b19382a76cc078ac2155418b9e3ed88910233,t,"",admin,2026-10-16 15:01:38.145391+08,v1,2026-10-16 15:01:38.145729+08

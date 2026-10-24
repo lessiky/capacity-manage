@@ -1,0 +1,43 @@
+# Binaries
+*.exe
+*.out
+dist/
+build/
+bin/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+vendor/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+tmp/
+temp/
+.cache/
+.playwright-cli/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Test & coverage
+coverage/
+*.coverage

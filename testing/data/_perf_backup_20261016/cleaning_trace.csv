@@ -1,0 +1,3 @@
+id,task_log_id,metric_code,raw_value,clean_value,rules_applied,is_anomaly,anomaly_reason,created_at
+157,120,PERF_SB_MEM,1,1.00000000,"[""type_convert""]",f,"",2026-10-16 15:12:21.344149+08
+176,135,PERF_SB_MEM,1,1.00000000,"[""type_convert""]",f,"",2026-10-16 15:14:55.513179+08

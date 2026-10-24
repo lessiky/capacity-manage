@@ -1,0 +1,4 @@
+id,name,script_type,description,status,created_by,created_at,updated_at
+48,sb_perf_sb_timeout,collect,M5 沙箱测试,active,admin,2026-10-16 15:01:38.035654+08,2026-10-16 15:01:38.035654+08
+49,sb_perf_sb_mem,collect,M5 沙箱测试,active,admin,2026-10-16 15:01:38.085252+08,2026-10-16 15:01:38.085252+08
+50,sb_perf_sb_net,collect,M5 沙箱测试,active,admin,2026-10-16 15:01:38.130914+08,2026-10-16 15:01:38.130914+08

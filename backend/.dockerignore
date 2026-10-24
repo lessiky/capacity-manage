@@ -1,0 +1,13 @@
+# 后端构建忽略（构建上下文 = 仓库根目录）
+.git
+.gitignore
+*.md
+docs/
+ui-mockup/
+build/
+data/
+tmp/
+node_modules/
+frontend/
+deploy/
+spike/

@@ -1,0 +1,12 @@
+BEGIN;
+DELETE FROM metric_value_rt WHERE metric_code LIKE 'PERF_%';
+DELETE FROM cleaning_trace WHERE metric_code LIKE 'PERF_%';
+DELETE FROM alert_record WHERE metric_code LIKE 'PERF_%';
+DELETE FROM collect_task_log WHERE flow_code LIKE 'M5_FLOW_SB_%';
+DELETE FROM python_script_version WHERE script_id IN (48,49,50);
+DELETE FROM python_script WHERE id IN (48,49,50);
+DELETE FROM collect_flow WHERE metric_code LIKE 'PERF_%';
+DELETE FROM report_result;
+DELETE FROM capacity_metric WHERE metric_code LIKE 'PERF_%';
+DELETE FROM business_system WHERE system_code LIKE 'PERF_%';
+COMMIT;

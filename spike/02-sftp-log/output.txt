@@ -1,0 +1,50 @@
+Go spike 02 (SFTP log) @ 2026-10-15 11:52:46
+
+--- 准备-SFTP 根目录 [PASS]
+dir=C:\logs\coredb (测试后清理)
+--- SFTP-进程内服务器启动 [PASS]
+addr=127.0.0.1:18795 err=<nil>
+--- SFTP-SSH 握手 + SFTP 会话建立 [PASS]
+err=<nil>
+--- SFTP-列目录 [PASS]
+entries=[ora-20261013.log ora-20261014.log] err=<nil>
+--- SFTP-Glob + 文件下载 + Stat [PASS]
+matches=[/logs/coredb/ora-20261013.log /logs/coredb/ora-20261014.log] bytes=335 err=<nil>
+解析结果:
+  2026-10-14 09:30:05 [INFO] disk /u01/oradata usage=86.4 unit=percent -> value=86.4 unit=percent
+  2026-10-14 09:30:05 [INFO] disk /u02/archive usage=63.2 unit=percent -> value=63.2 unit=percent
+  2026-10-14 09:30:06 [WARN] disk /u01/fastlog usage=91.8 unit=percent -> value=91.8 unit=percent
+  (跳过) 2026-10-14 09:31:00 [INFO] checkpoint complete elapsed=42s
+  2026-10-14 09:35:12 [INFO] disk /u01/oradata usage=86.4 unit=percent -> value=86.4 unit=percent
+--- logparse-regex 提取 value/unit (4 行命中, 1 行非容量行跳过) [PASS]
+parsed=4 skipped=1
+--- SFTP-错误密码拒绝 [PASS]
+err=SFTP 认证失败: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain
+--- sftp-真实 SSH 握手 + SFTP 会话 [PASS]
+err=<nil>
+--- sftp-真实列目录/data/aboss/log [PASS]
+dirs(前 10)=[20261011 20261014_stack 20261010 20261008 20261013 20261015 20261008_stack 20261007 20261009_stack 20261012_stack] err=<nil>
+--- sftp-真实日期目录列文件 + Glob(*run*20261014.txt) [PASS]
+files=103 matches=前10:[/data/aboss/log/20261014/a5_of_aip_41_run_20261014.txt /data/aboss/log/20261014/a5_cs_so_mc_smsend_dhzq41_run_20261014.txt /data/aboss/log/20261014/a5_rs_zx_41_report_run_20261014.txt /data/aboss/log/20261014/a5_fos_zx_41_run_20261014.txt /data/aboss/log/20261014/a5_dc_fos_zx_41_run_20261014.txt /data/aboss/log/20261014/a5_sc_mq_sys_zx_41_run_20261014.txt /data/aboss/log/20261014/a5_dc_fos_zx_41_report_run_20261014.txt /data/aboss/log/20261014/a5_sc_rs_local_zx_41_run_20261014.txt /data/aboss/log/20261014/a5_ss_fos_zx_41_run_20261014.txt /data/aboss/log/20261014/a5_of_jjhqdr_41_run_20261014.txt] err=<nil> gerr=<nil>
+  样例文件: /data/aboss/log/20261014/a5_of_aip_41_run_20261014.txt size=1552 bytes
+  原文前 15 行:
+  | 20261014 20:28:38.177 ҵ��ͳ�� a5glht 20261013 19:50:17.394 - 20261014 20:28:38.177 (��λ:����).
+  | 20261014 20:28:38.185 ���ܺ�,����,����ʱ,����,����,ƽ��,����
+  | 20261014 20:28:38.200 0�����񱻵���.
+  | 20261014 20:28:38.211 write thread pool proc state.
+  | 20261014 20:28:38.215 Proc01 state=0, proc=0, rcv=0, func=, thrid=1704, last_calltime(tick)=.
+  | 20261014 20:28:38.220 Proc02 state=0, proc=0, rcv=0, func=, thrid=1705, last_calltime(tick)=.
+  | 20261014 20:28:38.225 Proc03 state=0, proc=0, rcv=0, func=, thrid=1706, last_calltime(tick)=.
+  | 20261014 20:28:38.229 Proc04 state=0, proc=0, rcv=0, func=, thrid=1707, last_calltime(tick)=.
+  | 20261014 20:28:38.233 Proc05 state=0, proc=0, rcv=0, func=, thrid=1708, last_calltime(tick)=.
+  | 20261014 20:28:38.272 Proc06 state=0, proc=0, rcv=0, func=, thrid=1709, last_calltime(tick)=.
+  | 20261014 20:28:38.277 Proc07 state=0, proc=0, rcv=0, func=, thrid=1710, last_calltime(tick)=.
+  | 20261014 20:28:38.281 Proc08 state=0, proc=0, rcv=0, func=, thrid=1711, last_calltime(tick)=.
+  | 20261014 20:28:38.286 Proc09 state=0, proc=0, rcv=0, func=, thrid=1712, last_calltime(tick)=.
+  | 20261014 20:28:38.290 Proc010 state=0, proc=0, rcv=0, func=, thrid=1713, last_calltime(tick)=.
+  | 20261014 20:28:38.294 write thread pool proc state end.
+  | ...
+--- sftp-真实样例文件下载 + 读取 [PASS]
+readBytes=1552 size=1552 err=<nil>
+
+===== 11 passed, 0 failed =====

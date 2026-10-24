@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-16 17:13:07",
+  "bizDate": "2026-10-16",
+  "passed": 6,
+  "total": 6,
+  "results": [
+    {
+      "name": "1) 6 试点流程当日采集 success",
+      "ok": true,
+      "actual": "6/6",
+      "expect": "6/6"
+    },
+    {
+      "name": "2) 告警生成(6 指标均超预警线)",
+      "ok": true,
+      "actual": "6 个 active: ['RISK_CPU', 'RISK_MEM_GB', 'RPT_JOB_DUR', 'RPT_LOG_SIZE', 'TRADE_DB_USAGE', 'TRADE_MSG_QUEUE']",
+      "expect": "6 个 active: RISK_CPU,RISK_MEM_GB,RPT_JOB_DUR,RPT_LOG_SIZE,TRADE_DB_USAGE,TRADE_MSG_QUEUE"
+    },
+    {
+      "name": "3a) 当日日汇总完成(服务端计时)",
+      "ok": true,
+      "actual": "status=partial done=20 missing=50005 耗时=154s",
+      "expect": "success/partial"
+    },
+    {
+      "name": "3b) 试点指标日数据落地",
+      "ok": true,
+      "actual": "6/6 行",
+      "expect": "6/6"
+    },
+    {
+      "name": "4a) 日报生成含试点指标",
+      "ok": true,
+      "actual": "6/6 (status=None)",
+      "expect": "6/6"
+    },
+    {
+      "name": "4b) 导出 xlsx(PK)/pdf(%PDF) 魔数正确",
+      "ok": true,
+      "actual": "xlsx=True pdf=True",
+      "expect": "True/True"
+    }
+  ]
+}

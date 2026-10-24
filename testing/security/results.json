@@ -1,0 +1,314 @@
+{
+  "date": "2026-10-22 08:22:34",
+  "total": 51,
+  "passed": 51,
+  "failed": 0,
+  "results": [
+    {
+      "id": "TC-SEC-001a",
+      "title": "数据源列表不含明文凭据",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "id": "TC-SEC-001b",
+      "title": "数据源详情不含明文凭据(已脱敏)",
+      "passed": true,
+      "detail": "{\"host\": \"10.99.99.99\", \"port\": 3306, \"type\": \"db\", \"driver\": \"mysql\", \"database"
+    },
+    {
+      "id": "TC-SEC-001c",
+      "title": "DB 中 config 为密文(无明文特征串)",
+      "passed": true,
+      "detail": "{\"host\": \"10.99.99.99\", \"port\": 3306, \"type\": \"db\", \"driver\""
+    },
+    {
+      "id": "TC-SEC-001d",
+      "title": "操作日志不含明文凭据",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "id": "TC-SEC-010a",
+      "title": "垂直越权: 创建系统被拒(403)",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-010b",
+      "title": "垂直越权: 修改指标被拒(403)",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-010c",
+      "title": "垂直越权: 查看操作日志被拒(403)",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-010d",
+      "title": "垂直越权: 生成日报被拒(403)",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-010e",
+      "title": "垂直越权: 查看数据源被拒(403)",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-011a",
+      "title": "水平越权: 越权系统详情 403",
+      "passed": true,
+      "detail": "HTTP 403 code=40301"
+    },
+    {
+      "id": "TC-SEC-011b",
+      "title": "水平越权: 越权指标详情 403",
+      "passed": true,
+      "detail": "HTTP 403 code=40301"
+    },
+    {
+      "id": "TC-SEC-011c",
+      "title": "水平越权: 越权指标趋势 403",
+      "passed": true,
+      "detail": "HTTP 403 code=40301"
+    },
+    {
+      "id": "TC-SEC-011d",
+      "title": "水平越权: 越权日内数据 403",
+      "passed": true,
+      "detail": "HTTP 403 code=40301"
+    },
+    {
+      "id": "TC-SEC-011e",
+      "title": "水平越权: 越权日数据 403",
+      "passed": true,
+      "detail": "HTTP 403 code=40301"
+    },
+    {
+      "id": "TC-SEC-011f",
+      "title": "授权范围内数据正常可见(M5_SQL)",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "id": "TC-SEC-011g",
+      "title": "不限定指标时仅返回授权系统指标",
+      "passed": true,
+      "detail": "codes=['M5_CLEAN', 'M5_LOG', 'M5_PY', 'M5_SQL'] authorized=['M5_CLEAN', 'M5_LOG', 'M5_PY', 'M5_SQL', 'SEC_XSS']"
+    },
+    {
+      "id": "TC-SEC-011h",
+      "title": "指标列表仅含授权系统",
+      "passed": true,
+      "detail": "systems={'M5_SYS'}"
+    },
+    {
+      "id": "TC-SEC-011i",
+      "title": "告警列表仅含授权系统",
+      "passed": true,
+      "detail": "systems={'M5_SYS'}"
+    },
+    {
+      "id": "TC-SEC-011j",
+      "title": "大盘 KPI 按数据权限收敛",
+      "passed": true,
+      "detail": "systemCount=1 metricCount=5 expected=5"
+    },
+    {
+      "id": "TC-SEC-011k",
+      "title": "流程列表仅含授权系统指标",
+      "passed": true,
+      "detail": "metrics={'M5_LOG', 'M5_PY', 'M5_SQL', 'M5_CLEAN'}"
+    },
+    {
+      "id": "TC-SEC-011l",
+      "title": "任务列表仅含授权系统指标",
+      "passed": true,
+      "detail": "metrics={'M5_PY', 'M5_SQL', 'M5_LOG', 'M5_CLEAN'}"
+    },
+    {
+      "id": "TC-SEC-020a",
+      "title": "SQLi 登录: 未绕过认证",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-020b",
+      "title": "SQLi 登录(变体): 未绕过认证",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-021a",
+      "title": "SQLi 查询参数: 无 5xx/异常",
+      "passed": true,
+      "detail": "HTTP 200 code=0"
+    },
+    {
+      "id": "TC-SEC-021b",
+      "title": "SQLi 关键字: 无 5xx/异常",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "id": "TC-SEC-022a",
+      "title": "路径穿越: 仅返回固定日报文件(xlsx)或404, 无文件内容泄漏",
+      "passed": true,
+      "detail": "HTTP 404"
+    },
+    {
+      "id": "TC-SEC-022b",
+      "title": "路径穿越(反斜杠编码): 仅返回固定格式(xlsx)或错误, 无文件内容泄漏",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "id": "TC-SEC-023a",
+      "title": "命令注入: 脚本名原样存储不执行",
+      "passed": true,
+      "detail": "HTTP 200 name='sec_inj;$(echo PWNED) `id`'"
+    },
+    {
+      "id": "TC-SEC-023b",
+      "title": "XSS 载荷: 仅 JSON 存储/返回, 服务端不解析",
+      "passed": true,
+      "detail": "HTTP 409/200"
+    },
+    {
+      "id": "TC-SEC-024a",
+      "title": "超长用户名: 无 5xx",
+      "passed": true,
+      "detail": "HTTP 401"
+    },
+    {
+      "id": "TC-SEC-030a",
+      "title": "无 token: 401(40100)",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-030b",
+      "title": "非法 token: 401",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-030c",
+      "title": "篡改签名: 401",
+      "passed": true,
+      "detail": "HTTP 401"
+    },
+    {
+      "id": "TC-SEC-030d",
+      "title": "过期 token: 401",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-030e",
+      "title": "无服务端会话的 token: 401",
+      "passed": true,
+      "detail": "HTTP 401"
+    },
+    {
+      "id": "TC-SEC-031a",
+      "title": "登出后 token 立即失效",
+      "passed": true,
+      "detail": "HTTP 401 code=40100"
+    },
+    {
+      "id": "TC-SEC-032a",
+      "title": "连续 5 次失败后锁定(40101, 正确密码也拒绝)",
+      "passed": true,
+      "detail": "HTTP 401 code=40101 msg=账号已锁定，请 15 分钟后重试"
+    },
+    {
+      "id": "TC-SEC-040a",
+      "title": "AI 调用产生审计记录(含降级)",
+      "passed": true,
+      "detail": "HTTP 503 new=1"
+    },
+    {
+      "id": "TC-SEC-040b",
+      "title": "审计记录不含凭据原文(已脱敏)",
+      "passed": true,
+      "detail": "raw credential absent"
+    },
+    {
+      "id": "TC-SEC-041a",
+      "title": "AI 审计仅限 admin:log:view",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    },
+    {
+      "id": "TC-SEC-050a",
+      "title": "API Key 管理接口可用",
+      "passed": true,
+      "detail": "HTTP 200 code=0"
+    },
+    {
+      "id": "TC-SEC-050b",
+      "title": "API Key 正确 secret 可访问授权 scope",
+      "passed": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "id": "TC-SEC-050c",
+      "title": "API Key 错误 secret 被拒",
+      "passed": true,
+      "detail": "HTTP 401"
+    },
+    {
+      "id": "TC-SEC-050d",
+      "title": "API Key scope 越权被拒",
+      "passed": true,
+      "detail": "HTTP 403"
+    },
+    {
+      "id": "TC-SEC-051a",
+      "title": "Webhook HMAC-SHA256 签名与原始 body 一致",
+      "passed": true,
+      "detail": "ts=True sig=True"
+    },
+    {
+      "id": "TC-SEC-051b",
+      "title": "Webhook 幂等键头存在",
+      "passed": true,
+      "detail": "channel-test:6:20261022082234"
+    },
+    {
+      "id": "TC-SEC-052a",
+      "title": "SSRF 目标被拒: http://169.254.169.254/latest/meta-data",
+      "passed": true,
+      "detail": "HTTP 422 code=42200"
+    },
+    {
+      "id": "TC-SEC-052b",
+      "title": "SSRF 目标被拒: http://127.0.0.1:8080/internal",
+      "passed": true,
+      "detail": "HTTP 422 code=42200"
+    },
+    {
+      "id": "TC-SEC-052c",
+      "title": "SSRF 目标被拒: http://100.100.100.200/latest/meta-data",
+      "passed": true,
+      "detail": "HTTP 422 code=42200"
+    },
+    {
+      "id": "TC-SEC-053a",
+      "title": "通知模板拒绝可执行模板语法",
+      "passed": true,
+      "detail": "HTTP 422 code=42200"
+    },
+    {
+      "id": "TC-SEC-054a",
+      "title": "事件因子写权限越权被拒",
+      "passed": true,
+      "detail": "HTTP 403 code=40300"
+    }
+  ]
+}

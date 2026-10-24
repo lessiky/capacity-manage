@@ -1,0 +1,31 @@
+:root {
+  /* 三级状态色（UI 设计规范 §2） */
+  --cap-normal: #34c759;
+  --cap-warn: #ff9500;
+  --cap-danger: #ff3b30;
+  --cap-bg: #f5f7fa;
+  --cap-primary: #1f6feb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--cap-bg);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  color: #303133;
+}
+
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}

@@ -1,0 +1,18 @@
+Go spike 04 (AI) @ 2026-10-15 11:53:33
+
+--- 脱敏-凭据/主机/手机/证件不出现在提示词 [PASS]
+原始: 帮我生成采集流程: 数据源 mysql://scott:tiger@10.1.2.3:3306/coredb, 密码 password: hunter22, 联系人 13812345678, 证件 110101199003077758
+脱敏后: 帮我生成采集流程: 数据源 <CONN>, 密码 password=****** 联系人 138****5678, 证件 1101**********7758
+泄露项: []
+--- 协议-OpenAI 兼容请求/鉴权/响应解析 [PASS]
+err=<nil> content="done: print ok" model="mock-model" usage=10/5
+--- 降级-未配置端点时返回错误(上层映射 50300, 不阻塞主流程) [PASS]
+err=llm 请求失败: Post "/chat/completions": unsupported protocol scheme ""
+--- 降级-端点不可达时返回错误(不 panic/不挂起) [PASS]
+err=llm 请求失败: Post "http://127.0.0.1:1/chat/completions": dial tcp 127.0.0.1:1: connectex: No connection could be made because the target machine actively refused it.
+--- 降级-401 鉴权失败返回可读错误 [PASS]
+err=llm 返回 401: {"error":"invalid api key"}
+--- 连通-真实 LLM 端点(行内 AI 网关 OpenAI 兼容协议) [PASS]
+err=<nil> model="dhzq-qwen3.8-2" usage=57/121 content="\n\n正常"
+
+===== 6 passed, 0 failed =====

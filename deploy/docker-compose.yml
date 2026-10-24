@@ -1,0 +1,129 @@
+name: capacity-manage
+
+# 用法（仓库根目录）:
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/env/dev.env up -d
+# 环境变量 APP_ENV 选择 env 文件: deploy/env/{dev,sit,uat,prod}.env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-capacity}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-capacity123}
+      POSTGRES_DB: ${DB_NAME:-capacity}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: "512mb"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  backend-migrate:
+    image: capacity-manage/backend:${IMAGE_TAG:-dev}
+    restart: "no"
+    env_file:
+      - env/${APP_ENV:-dev}.env
+    environment:
+      DB_HOST: postgres
+      REDIS_ADDR: redis:6379
+      WORKER_URL: http://worker:9100
+      FILE_ROOT: /app/data/files
+      TZ: Asia/Shanghai
+    command: ["sh", "-c", "capacity-server migrate && capacity-server seed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - files:/app/data/files
+
+  backend:
+    image: capacity-manage/backend:${IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - env/${APP_ENV:-dev}.env
+    environment:
+      DB_HOST: postgres
+      REDIS_ADDR: redis:6379
+      WORKER_URL: http://worker:9100
+      FILE_ROOT: /app/data/files
+      TZ: Asia/Shanghai
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+    volumes:
+      - files:/app/data/files
+
+  worker:
+    image: capacity-manage/backend:${IMAGE_TAG:-dev}
+    restart: unless-stopped
+    # 容器级沙箱加固（计划 Task 10 Step 5）: gVisor 需宿主机 runsc 运行时,
+    # 在未启用 runsc 的环境以最小权限 + 进程/内存上限兜底。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/v1/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+    env_file:
+      - env/${APP_ENV:-dev}.env
+    environment:
+      WORKER_PORT: "9100"
+      WORKER_WORK_ROOT: /tmp/capworker
+      TZ: Asia/Shanghai
+    command: ["python", "-I", "/app/worker/run_worker.py"]
+    ports:
+      - "9100:9100"
+    depends_on:
+      - backend
+    volumes:
+      - workroot:/tmp/capworker
+
+  frontend:
+    image: capacity-manage/frontend:${IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:
+  files:
+  workroot:

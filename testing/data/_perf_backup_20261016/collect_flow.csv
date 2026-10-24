@@ -1,0 +1,4 @@
+id,flow_code,name,metric_code,data_source_id,collect_type,collect_config,clean_config,schedule_mode,cron_expr,trading_market,window_time,biz_date_mode,version,status,enabled,remark,created_by,created_at,updated_at
+46,M5_FLOW_SB_PERF_SB_TIMEOUT,沙箱-超时,PERF_SB_TIMEOUT,6,python,"{""version"": 1, ""scriptId"": 48}",{},normal,0 3 30 2 *,"","",natural,1,active,t,"",admin,2026-10-16 15:01:38.062963+08,2026-10-16 15:01:38.074487+08
+47,M5_FLOW_SB_PERF_SB_MEM,沙箱-内存,PERF_SB_MEM,6,python,"{""version"": 1, ""scriptId"": 49}",{},normal,0 3 30 2 *,"","",natural,1,active,t,"",admin,2026-10-16 15:01:38.108383+08,2026-10-16 15:01:38.118806+08
+48,M5_FLOW_SB_PERF_SB_NET,沙箱-网络,PERF_SB_NET,6,python,"{""version"": 1, ""scriptId"": 50}",{},normal,0 3 30 2 *,"","",natural,1,active,t,"",admin,2026-10-16 15:01:38.161803+08,2026-10-16 15:01:38.174773+08

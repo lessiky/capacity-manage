@@ -1,0 +1,12 @@
+.git
+frontend/node_modules
+frontend/dist
+backend/data
+data
+deploy
+docs
+spike
+*.log
+*.exe
+.env
+.vscode

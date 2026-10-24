@@ -81,6 +81,7 @@ func registerRoutes(
 		open.GET("/stream/rt", oaH.RequireScope(openapi.ScopeDataRead), oaH.OpenRTData)
 		open.GET("/forecast", oaH.RequireScope(openapi.ScopeForecastRead), oaH.OpenForecast)
 	}
+	v1.GET("/branding", sysH.Branding)
 
 	// /auth 之外的全部路由要求 JWT 认证 + 会话滑动刷新
 	v1.Use(middleware.Auth(rdb, jwtSecret), middleware.SlideSession(rdb, sessionTTL))
@@ -110,6 +111,8 @@ func registerRoutes(
 		admin.DELETE("/data-scope/:id", az.RequirePerm("admin:datascope:manage"), sysH.DeleteDataScope)
 		admin.GET("/params", az.RequirePerm("admin:param:manage"), sysH.ListParams)
 		admin.PUT("/params", az.RequirePerm("admin:param:manage"), sysH.PutParam)
+		admin.POST("/params/platform-icon", az.RequirePerm("admin:param:manage"), sysH.UploadPlatformIcon)
+		admin.DELETE("/params/platform-icon", az.RequirePerm("admin:param:manage"), sysH.ClearPlatformIcon)
 		admin.GET("/ai/config", az.RequirePerm("admin:param:manage"), aiH.GetConfig)
 		admin.PUT("/ai/config", az.RequirePerm("admin:param:manage"), aiH.PutConfig)
 		admin.POST("/ai/test", az.RequirePerm("admin:param:manage"), aiH.TestConnection)

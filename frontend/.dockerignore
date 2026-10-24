@@ -1,0 +1,4 @@
+# 前端构建忽略
+node_modules
+*.log
+.git

@@ -1,0 +1,31 @@
+容量管理平台 dev 全栈冒烟 @ 2026-10-15 10:22:43
+
+===== docker ps =====
+{.Names}   {.Status}   {.Ports}
+{.Names}   {.Status}   {.Ports}
+{.Names}   {.Status}   {.Ports}
+{.Names}   {.Status}   {.Ports}
+{.Names}   {.Status}   {.Ports}
+{.Names}   {.Status}   {.Ports}
+
+===== GET http://127.0.0.1:8080/healthz =====
+HTTP 200 {"code":0,"message":"ok","data":{"status":"ok"},"traceId":"5b1d9ff2-1484-414d-abc7-179dffab5cce"}
+===== GET http://127.0.0.1:8080/readyz =====
+HTTP 200 {"code":0,"message":"ok","data":{"status":"ready"},"traceId":"e524f92b-cb3d-44a4-9aa7-3f78b98e8851"}
+===== POST http://127.0.0.1:8080/api/v1/auth/login (admin) =====
+code=0 message=ok
+accessToken len=311 expiresIn=7200 user=admin
+===== GET http://127.0.0.1:8080/api/v1/dashboard/overview =====
+code=0 {"code":0,"message":"ok","data":{"activeMetricCount":0,"alertActive":0,"alertNewToday":0,"bizDate":"2026-10-14","collectFailToday":0,"metricCount":0,"overDangerCount":0,"overWarnCount":0,"systemCount":0,"topWater":null},"traceId":"a7fc0921-673e-4f8f-bcb7-f515bdc579e6"}
+===== GET http://127.0.0.1:8080/api/v1/systems =====
+code=0 {"code":0,"message":"ok","data":{"items":[],"total":0,"page":1,"pageSize":20},"traceId":"9de14d48-fb9b-4ea2-beb7-77f35a35d77a"}
+===== GET http://127.0.0.1:8080/api/v1/metrics =====
+code=0 {"code":0,"message":"ok","data":{"items":[],"total":0,"page":1,"pageSize":20},"traceId":"6caa7f4e-65f7-4b64-a858-af35e49e6ff8"}
+===== GET http://127.0.0.1:8080/api/v1/trading-days?market=SH&page=1&size=3 =====
+code=0 {"code":0,"message":"ok","data":[{"date":"2026-09-15","isTrading":true,"dayType":"trading","source":"seed"},{"date":"2026-09-16","isTrading":true,"dayType":"trading","source":"seed"},{"date":"2026-09-17","isTrading":true,"dayType":"trading","source":"seed"},{"date":"2026-09-18","isTrading":false,"dayType":"weekend","source":"seed"},{"date":"2026-09-19","isTrading":false,"dayType":"weekend","source":"seed"},{"date":"2026-09-20","isTrading":true,"dayType":"trading","source":"seed"},{"date":"2026-0 ...(truncated)
+===== GET http://127.0.0.1:9100/v1/health (worker) =====
+HTTP 200 {"ok": true, "pool": {"busy": 0, "free": 4, "queued": 0}}
+===== GET http://127.0.0.1/ (nginx frontend) =====
+HTTP 200 len=404 index.html(app div)=True
+
+===== smoke done =====

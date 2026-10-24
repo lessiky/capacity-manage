@@ -1,0 +1,145 @@
+id,flow_id,flow_code,metric_code,triggered_at,started_at,finished_at,status,duration_ms,rows_collected,parse_fail_count,parse_fail_rate,anomaly_count,error_msg,retry_count,source,operator,created_at,run_log
+170,47,M5_FLOW_SB_PERF_SB_MEM,PERF_SB_MEM,2026-10-16 16:28:37.541374+08,2026-10-16 16:28:37.541374+08,2026-10-16 16:31:37.93429+08,failed,0,0,0,0.0000,0,"采集失败: 脚本执行 failed: ScriptError: Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 12, in <module>
+    main()
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 7, in main
+    x = bytes(1100 * 1024 * 1024)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+MemoryError",3,manual,admin,2026-10-16 16:28:37.54175+08,"[worker] status=failed exitCode=1 durationMs=75 errorType=ScriptError
+--- stderr ---
+Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 12, in <module>
+    main()
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 7, in main
+    x = bytes(1100 * 1024 * 1024)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+MemoryError
+
+"
+171,48,M5_FLOW_SB_PERF_SB_NET,PERF_SB_NET,2026-10-16 16:28:38.549269+08,2026-10-16 16:28:38.549269+08,2026-10-16 16:31:39.085046+08,failed,0,0,0,0.0000,0,"采集失败: 脚本执行 failed: ScriptError: recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 110, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入",3,manual,admin,2026-10-16 16:28:38.549698+08,"[worker] status=failed exitCode=1 durationMs=104 errorType=ScriptError
+--- stderr ---
+Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 110, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入
+
+"
+120,47,M5_FLOW_SB_PERF_SB_MEM,PERF_SB_MEM,2026-10-16 15:12:21.08205+08,2026-10-16 15:12:21.08205+08,2026-10-16 15:12:21.316074+08,success,0,1,0,0.0000,0,"",0,manual,admin,2026-10-16 15:12:21.082401+08,"[worker] status=success exitCode=0 durationMs=147
+--- stdout ---
+[{""metric"": ""PERF_SB_MEM"", ""value"": 1.0, ""unit"": ""%""}]
+
+"
+135,47,M5_FLOW_SB_PERF_SB_MEM,PERF_SB_MEM,2026-10-16 15:14:55.364778+08,2026-10-16 15:14:55.364778+08,2026-10-16 15:14:55.508425+08,success,0,1,0,0.0000,0,"",0,manual,admin,2026-10-16 15:14:55.365182+08,"[worker] status=success exitCode=0 durationMs=79
+--- stdout ---
+[{""metric"": ""PERF_SB_MEM"", ""value"": 1.0, ""unit"": ""%""}]
+
+"
+121,48,M5_FLOW_SB_PERF_SB_NET,PERF_SB_NET,2026-10-16 15:12:22.087761+08,2026-10-16 15:12:22.087761+08,2026-10-16 15:15:22.601333+08,failed,0,0,0,0.0000,0,"采集失败: 脚本执行 failed: ScriptError: recent call last):
+  File ""/app/worker/sandbox.py"", line 138, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 134, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 100, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入",3,manual,admin,2026-10-16 15:12:22.088097+08,"[worker] status=failed exitCode=1 durationMs=176 errorType=ScriptError
+--- stderr ---
+Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 138, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 134, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 100, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入
+
+"
+119,46,M5_FLOW_SB_PERF_SB_TIMEOUT,PERF_SB_TIMEOUT,2026-10-16 15:12:21.06048+08,2026-10-16 15:12:21.06048+08,,timeout,,,0,,0,"",0,manual,admin,2026-10-16 15:12:21.060872+08,""
+152,46,M5_FLOW_SB_PERF_SB_TIMEOUT,PERF_SB_TIMEOUT,2026-10-16 15:59:17.400902+08,2026-10-16 15:59:17.400902+08,2026-10-16 16:22:17.355752+08,failed,0,0,0,0.0000,0,采集失败: 脚本执行 timeout: ,3,manual,admin,2026-10-16 15:59:17.401185+08,"[worker] status=timeout exitCode=0 durationMs=0
+"
+169,46,M5_FLOW_SB_PERF_SB_TIMEOUT,PERF_SB_TIMEOUT,2026-10-16 16:28:37.531273+08,2026-10-16 16:28:37.531273+08,2026-10-16 16:39:37.501202+08,failed,0,0,0,0.0000,0,采集失败: 脚本执行 timeout: ,3,manual,admin,2026-10-16 16:28:37.531852+08,"[worker] status=timeout exitCode=0 durationMs=0
+"
+153,47,M5_FLOW_SB_PERF_SB_MEM,PERF_SB_MEM,2026-10-16 15:59:17.409785+08,2026-10-16 15:59:17.409785+08,2026-10-16 16:02:17.722941+08,failed,0,0,0,0.0000,0,"采集失败: 脚本执行 failed: ScriptError: Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 12, in <module>
+    main()
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 7, in main
+    x = bytes(1100 * 1024 * 1024)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+MemoryError",3,manual,admin,2026-10-16 15:59:17.410203+08,"[worker] status=failed exitCode=1 durationMs=65 errorType=ScriptError
+--- stderr ---
+Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 12, in <module>
+    main()
+  File ""/tmp/capworker/flow-47/_run_script.py"", line 7, in main
+    x = bytes(1100 * 1024 * 1024)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+MemoryError
+
+"
+154,48,M5_FLOW_SB_PERF_SB_NET,PERF_SB_NET,2026-10-16 15:59:18.418141+08,2026-10-16 15:59:18.418141+08,2026-10-16 16:02:18.771035+08,failed,0,0,0,0.0000,0,"采集失败: 脚本执行 failed: ScriptError: recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 110, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入",3,manual,admin,2026-10-16 15:59:18.418543+08,"[worker] status=failed exitCode=1 durationMs=92 errorType=ScriptError
+--- stderr ---
+Traceback (most recent call last):
+  File ""/app/worker/sandbox.py"", line 148, in <module>
+    main()
+  File ""/app/worker/sandbox.py"", line 144, in main
+    exec(compile(code, script_path, ""exec""), g)  # noqa: S102 (受控环境)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/tmp/capworker/flow-48/_run_script.py"", line 1, in <module>
+    import socket
+  File ""/app/worker/sandbox.py"", line 110, in guarded_import
+    raise ImportError(f""[sandbox] 模块 {name} 在黑名单, 禁止导入"")
+ImportError: [sandbox] 模块 socket 在黑名单, 禁止导入
+
+"

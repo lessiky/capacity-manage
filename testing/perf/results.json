@@ -1,0 +1,128 @@
+{
+  "date": "2026-10-16 16:39:40",
+  "no_data": false,
+  "total": 15,
+  "passed": 15,
+  "results": [
+    {
+      "scene": "S1",
+      "name": "20并发用户常规操作 p95 响应",
+      "actual": "263ms",
+      "target": "<3s",
+      "ok": true,
+      "detail": "n=200 p50=84ms max=523ms"
+    },
+    {
+      "scene": "S2",
+      "name": "大盘/列表首屏 p95 加载",
+      "actual": "25ms",
+      "target": "<3s",
+      "ok": true,
+      "detail": "n=100 p50=11ms max=57ms"
+    },
+    {
+      "scene": "S3",
+      "name": "日级任务全部完成(采集+日汇总) 时效",
+      "actual": "2s (采集2s+汇总0s, 13流程)",
+      "target": "≤30分钟",
+      "ok": true,
+      "detail": "试点规模基线; 5万指标口径见 S7"
+    },
+    {
+      "scene": "S4a",
+      "name": "日增量完整性: 30 个连续业务日各 5 万行(≥1万行/日) 无丢失",
+      "actual": "30天×50000行, 异常日=0",
+      "target": "无数据丢失",
+      "ok": true,
+      "detail": "造数 5 万指标×200 日, 抽查最近 30 日"
+    },
+    {
+      "scene": "S4b",
+      "name": "1 万行/日 连续写入吞吐",
+      "actual": "均值 16950 行/s (3批)",
+      "target": "记录基线",
+      "ok": true,
+      "detail": "各批: ['20650', '13024', '17176']"
+    },
+    {
+      "scene": "S4c",
+      "name": "30 天后查询无性能劣化",
+      "actual": "后30天p95/前30天p95 = 0.63x",
+      "target": "<1.5x",
+      "ok": true,
+      "detail": "前30天p95=215ms 后30天p95=136ms"
+    },
+    {
+      "scene": "S5a",
+      "name": "千万行日表 90 天×100 指标范围查询 p95",
+      "actual": "419ms",
+      "target": "<2s",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "scene": "S5b",
+      "name": "单指标 90 天趋势 p95",
+      "actual": "56ms",
+      "target": "<2s",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "scene": "S5c",
+      "name": "千万行级全表日期范围聚合(count 61日×5万)",
+      "actual": "3050019 行 / 713ms",
+      "target": "<2s",
+      "ok": true,
+      "detail": "DB 直查基线"
+    },
+    {
+      "scene": "S6",
+      "name": "全量指标(5万)日报生成",
+      "actual": "9401ms, metricsTotal=50019",
+      "target": "<60s",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "scene": "S7",
+      "name": "5万指标×200日 写入/查询基线(容量评估)",
+      "actual": "日汇总=274s 大盘overview p95=32ms trend30d p95=20ms",
+      "target": "记录基线(非门禁)",
+      "ok": true,
+      "detail": "写入: 1000万行 INSERT..SELECT 见造数日志; 汇总: status=partial done=0 missing=50019 服务端耗时=04:34; 查询: S5/S6; 结论见性能测试报告"
+    },
+    {
+      "scene": "S8a",
+      "name": "沙箱网络隔离: import socket 被拒(任务失败且无外联)",
+      "actual": "failed / 采集失败: 脚本执行 failed: ScriptError: recent call last):\n  File \"/app/worker/sandbox.p",
+      "target": "任务失败+黑名单拦截",
+      "ok": true,
+      "detail": "{\"id\": 171, \"flowId\": 48, \"flowCode\": \"M5_FLOW_SB_PERF_SB_NET\", \"metricCode\": \"PERF_SB_NET\", \"triggeredAt\": \"2026-10-16T08:28:38.549269Z\", \"startedAt\": \"2026-10-16T08:28:38.549269Z\", \"finishedAt\": \"20"
+    },
+    {
+      "scene": "S8b",
+      "name": "沙箱内存限制(1024MB): 1.1GB 分配被拒",
+      "actual": "failed / 采集失败: 脚本执行 failed: ScriptError: Traceback (most recent call last):\n  File \"/app/",
+      "target": "任务失败(内存上限生效)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "scene": "S8c",
+      "name": "沙箱超时终止(脚本超预算被强杀, 按 FR-COL-31 重试 3 次后终态)",
+      "actual": "failed / retryCount=3",
+      "target": "超时终止且非 success",
+      "ok": true,
+      "detail": "采集失败: 脚本执行 timeout: "
+    },
+    {
+      "scene": "S8d",
+      "name": "沙箱故障不影响 worker 主进程",
+      "actual": "后续正常脚本任务: success",
+      "target": "success",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

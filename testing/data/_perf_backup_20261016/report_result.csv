@@ -1,0 +1,4 @@
+id,report_type,biz_date,status,file_ref,metrics_total,metrics_over,error_msg,generated_at
+35,daily,2026-07-19,success,reports/daily/2026-07-19.xlsx,50019,0,"",2026-10-16 16:29:05.22235+08
+2,daily,2026-10-16,success,reports/daily/2026-10-16.xlsx,50025,17,"",2026-10-16 17:15:40.004708+08
+1,daily,2026-10-15,success,reports/daily/2026-10-15.xlsx,50025,3,"",2026-10-16 18:22:25.35254+08

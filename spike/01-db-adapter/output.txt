@@ -1,0 +1,31 @@
+Go spike 01 (DB adapter) @ 2026-10-15 11:52:22
+
+--- mysql-DSN 解析(与生产 ParseDSN 相同路径) [PASS]
+err=<nil>
+--- mysql-连接尝试快速失败(目标不可达) [PASS]
+err=dial tcp 10.1.1.10:3306: i/o timeout
+--- oracle-连接尝试快速失败(目标不可达) [PASS]
+err=missing port in address
+已注册驱动: [mysql oracle pgx pgx/v5]
+--- 驱动注册-含 mysql 与 oracle [PASS]
+--- postgres-标量查询 [PASS]
+sum=2 err=<nil>
+--- postgres-多行多类型扫描(3 行) [PASS]
+rows=3 first={1 86.4 0.864 核心库} err=<nil>
+--- postgres-只读事务(采集语义) [PASS]
+tables=31 err=<nil>
+  (重试: 密码去除尾部空白)
+--- oracle-真实 Ping(128.6.120.65:1521/ygtcs) [PASS]
+err=<nil>
+--- oracle-真实查询 SELECT 1 FROM DUAL [PASS]
+v=1 err=<nil>
+  oracle session: user=SJCJ version=Oracle Database 11g Enterprise Edition Release 11.2.0.4.0 - 64bit Production
+--- mysql-真实 Ping(128.6.120.31:3306) [PASS]
+err=<nil>
+--- mysql-真实查询 SELECT 1 [PASS]
+v=1 err=<nil>
+--- mysql-真实查询 SELECT VERSION() [PASS]
+version=5.7.21-log err=<nil>
+
+结论: 驱动接线 + 真实环境连通复测完成 (见上方真实环境用例)。
+===== 12 passed, 0 failed =====
