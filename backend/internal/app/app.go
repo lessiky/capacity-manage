@@ -170,7 +170,7 @@ func New(ctx context.Context, d *Deps) (*App, error) {
 	})
 
 	// 调度器回调注入（避免模块间循环依赖）
-	sched.SetSummary(data.RunDailySummary)
+	sched.SetSummary(data.RunScheduledDailySummary)
 	sched.SetReportGen(func(ctx2 context.Context, db2 *gorm.DB, bizDate time.Time) error {
 		res, err := report.GenerateDaily(ctx2, db2, d.Store, bizDate)
 		if err != nil {

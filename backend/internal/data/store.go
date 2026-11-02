@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"capacity-manage/backend/internal/alert"
@@ -154,6 +155,27 @@ func PickBizDate(ctx context.Context, cal *tradingday.Calendar, fl *persistence.
 	}
 }
 
+// pickSummaryBizDate 确定日汇总的目标业务日。日汇总的 anchor 由调度器或人工入口
+// 指定为目标业务日: natural/prev_day 直接使用; calendar 仅在 anchor 非交易日时回退到
+// 当天或之前的最近交易日, 避免对已是交易日的数据日期再次执行 PrevTradingDay。
+func pickSummaryBizDate(ctx context.Context, cal *tradingday.Calendar, fl *persistence.CollectFlow, anchor time.Time) time.Time {
+	anchor = clock.DayStart(anchor)
+	if fl == nil || fl.BizDateMode != "calendar" || cal == nil {
+		return anchor
+	}
+	market := fl.TradingMarket
+	if market == "" {
+		market = "SH"
+	}
+	if trading, err := cal.IsTradingDay(ctx, market, anchor); err == nil && trading {
+		return anchor
+	}
+	if td, err := cal.PrevTradingDay(ctx, market, anchor); err == nil {
+		return td
+	}
+	return anchor
+}
+
 type dayAgg struct {
 	MetricCode string   `gorm:"column:metric_code"`
 	MaxV       *float64 `gorm:"column:max_v"`
@@ -246,22 +268,33 @@ func levelRank(l string) int {
 	}
 }
 
-// SummarizeDay 每日汇总（FR-DAY-02/08, 幂等）:
-// 对每个启用指标按其业务日汇总日内数据 → 日数据(max/min/avg/sum/last + 水位 + 最高级别)
+// SummarizeDay 手工每日汇总（FR-DAY-02/08, 幂等）:
+// 对每个启用指标按用户指定的业务日汇总日内数据。
 func (s *Store) SummarizeDay(ctx context.Context, anchor time.Time, dep *SummaryDeps) (done, missing int, err error) {
+	done, missing, _, err = s.summarize(ctx, anchor, dep, nil)
+	return done, missing, err
+}
+
+// SummarizeScheduledDay 自动每日汇总: trading_day 流程按 asOf 时刻最近一次
+// 已完成调度推导业务日, 避免非交易日 anchor 被误写成 missing。
+func (s *Store) SummarizeScheduledDay(ctx context.Context, anchor, asOf time.Time, dep *SummaryDeps) (done, missing int, bizDates []time.Time, err error) {
+	return s.summarize(ctx, anchor, dep, &asOf)
+}
+
+func (s *Store) summarize(ctx context.Context, anchor time.Time, dep *SummaryDeps, scheduledAt *time.Time) (done, missing int, bizDates []time.Time, err error) {
 	anchor = clock.DayStart(anchor)
 	var metrics []persistence.CapacityMetric
 	// 仅普通指标参与日汇总(group/aggregate 为虚拟节点, 无日内数据)
 	if err := s.db.Where("status = 'active' AND metric_kind = 'normal'").Find(&metrics).Error; err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	if len(metrics) == 0 {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 	// 活动流程(metric → flow): 用于判定交易日历径
 	var flows []persistence.CollectFlow
 	if err := s.db.Where("status = 'active' AND enabled = ?", true).Find(&flows).Error; err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	flowMap := make(map[string]*persistence.CollectFlow, len(flows))
 	for i := range flows {
@@ -270,15 +303,27 @@ func (s *Store) SummarizeDay(ctx context.Context, anchor time.Time, dep *Summary
 	// 按业务日分组
 	groups := map[time.Time][]int{}
 	for i := range metrics {
-		biz := PickBizDate(ctx, dep.Cal, flowMap[metrics[i].MetricCode], anchor)
+		flow := flowMap[metrics[i].MetricCode]
+		biz := pickSummaryBizDate(ctx, dep.Cal, flow, anchor)
+		if scheduledAt != nil && flow != nil && flow.ScheduleMode == "trading_day" {
+			var berr error
+			biz, berr = pickScheduledSummaryBizDate(ctx, dep.Cal, flow, *scheduledAt)
+			if berr != nil {
+				return 0, 0, nil, berr
+			}
+		}
+		if scheduledAt != nil && flow != nil && flow.CreatedAt.After(biz) {
+			continue
+		}
 		groups[biz] = append(groups[biz], i)
 	}
 	now := time.Now()
 	var summarized []string
 	for biz, idxs := range groups {
+		bizDates = append(bizDates, biz)
 		aggs, aerr := s.aggregateDay(ctx, biz, biz.AddDate(0, 0, 1))
 		if aerr != nil {
-			return done, missing, aerr
+			return done, missing, nil, aerr
 		}
 		aggMap := map[string]dayAgg{}
 		for _, a := range aggs {
@@ -286,7 +331,7 @@ func (s *Store) SummarizeDay(ctx context.Context, anchor time.Time, dep *Summary
 		}
 		var existingRows []persistence.MetricValueDay
 		if eerr := s.db.Where("biz_date = ?", biz).Find(&existingRows).Error; eerr != nil {
-			return done, missing, eerr
+			return done, missing, nil, eerr
 		}
 		existingMap := make(map[string]persistence.MetricValueDay, len(existingRows))
 		for i := range existingRows {
@@ -309,19 +354,41 @@ func (s *Store) SummarizeDay(ctx context.Context, anchor time.Time, dep *Summary
 			}
 			row.UpdatedAt = now
 			if err := s.upsertDayRow(&row); err != nil {
-				return done, missing, fmt.Errorf("day upsert %s: %w", m.MetricCode, err)
+				return done, missing, nil, fmt.Errorf("day upsert %s: %w", m.MetricCode, err)
 			}
 		}
 	}
+	sort.Slice(bizDates, func(i, j int) bool { return bizDates[i].Before(bizDates[j]) })
 	// 历史峰谷维护(best effort: 失败时读取路径惰性初始化会重算)
 	if len(summarized) > 0 {
 		_ = s.RefreshPeaks(ctx, summarized...)
 	}
 	// 汇总指标: 主统计模块跨子指标聚合 → 日值(水位/级别) + 阈值告警联动(须在普通指标日值落库后执行)
-	if err := s.summarizeAggregates(ctx, anchor, dep); err != nil {
-		return done, missing, err
+	for _, biz := range bizDates {
+		if err := s.summarizeAggregates(ctx, biz, dep); err != nil {
+			return done, missing, nil, err
+		}
 	}
-	return done, missing, nil
+	return done, missing, bizDates, nil
+}
+
+func pickScheduledSummaryBizDate(ctx context.Context, cal *tradingday.Calendar, flow *persistence.CollectFlow, asOf time.Time) (time.Time, error) {
+	if cal == nil || flow == nil || flow.ScheduleMode != "trading_day" {
+		return time.Time{}, fmt.Errorf("scheduled summary requires trading_day flow and calendar")
+	}
+	market := flow.TradingMarket
+	if market == "" {
+		market = "SH"
+	}
+	window := flow.WindowTime
+	if window == "" {
+		window = "17:30:00"
+	}
+	lastRun, err := cal.PrevTriggerOnOrBefore(ctx, market, window, asOf)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return cal.BizDateForRun(ctx, market, flow.BizDateMode, lastRun)
 }
 
 // SummarizeMetricBizDate 仅刷新一个指标的业务日日值。
@@ -469,6 +536,10 @@ func (s *Store) summarizeAggregates(ctx context.Context, biz time.Time, dep *Sum
 		if len(modLeaves) == 0 {
 			continue // 主模块无子指标(如模块标识已变更), 跳过不阻断
 		}
+		moduleModes, err := persistence.MetricStatModuleModes(s.db, a.MetricCode)
+		if err != nil {
+			return fmt.Errorf("aggregate module config %s: %w", a.MetricCode, err)
+		}
 		// 业务日日值: 叶子指标 + 其权重指标
 		codes := make([]string, 0, len(modLeaves)*2)
 		for j := range modLeaves {
@@ -506,7 +577,7 @@ func (s *Store) summarizeAggregates(ctx context.Context, biz time.Time, dep *Sum
 				n++
 			}
 		}
-		v := metricagg.Aggregate(metricagg.Mode(statModes, weights), pairs)
+		v := metricagg.Aggregate(metricagg.Mode(moduleModes[moduleKey], statModes, weights), pairs)
 		if v == nil {
 			continue
 		}

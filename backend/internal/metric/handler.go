@@ -1,21 +1,23 @@
 package metric
 
 import (
+	"encoding/json"
 	"log/slog"
 	"sort"
-	"time"
 	"strconv"
 	"strings"
+	"time"
 
 	"capacity-manage/backend/internal/metricagg"
 	"capacity-manage/backend/internal/middleware"
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/clock"
 	"capacity-manage/backend/internal/pkg/resp"
-"capacity-manage/backend/internal/pkg/scope"
+	"capacity-manage/backend/internal/pkg/scope"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Handler struct {
@@ -63,32 +65,51 @@ func validateThreshold(mode, direction string, warn, danger *float64) error {
 			}
 		}
 	default:
-		return resp.NewErr(resp.CodeBadRequest, "%s", "未知阈值类型: " + mode)
+		return resp.NewErr(resp.CodeBadRequest, "%s", "未知阈值类型: "+mode)
 	}
 	return nil
 }
 
 type metricReq struct {
-	MetricCode     string   `json:"metricCode" binding:"required,min=2,max=64"`
-	Name           string   `json:"name" binding:"required"`
-	MetricKind     string   `json:"metricKind" binding:"omitempty,oneof=normal group aggregate"`
+	MetricCode       string   `json:"metricCode" binding:"required,min=2,max=64"`
+	Name             string   `json:"name" binding:"required"`
+	MetricKind       string   `json:"metricKind" binding:"omitempty,oneof=normal group aggregate"`
 	ParentCode       string   `json:"parentCode" binding:"max=64"`
 	StatModule       string   `json:"statModule" binding:"max=32"`
 	MainModule       string   `json:"mainModule" binding:"max=32"`
 	WeightMetricCode string   `json:"weightMetricCode" binding:"max=64"`
 	SystemCode       string   `json:"systemCode" binding:"required"`
-	Category       string   `json:"category"`
-	MetricType     string   `json:"metricType" binding:"omitempty,oneof=usage absolute increment"`
-	Unit           string   `json:"unit" binding:"required"`
-	DsType         string   `json:"dsType" binding:"omitempty,oneof=db log"`
-	CollectMethod  string   `json:"collectMethod" binding:"omitempty,oneof=sql logparse python"`
-	StatMode       string   `json:"statMode" binding:"omitempty,oneof=latest max min avg sum"`
-	JudgeDirection string   `json:"judgeDirection" binding:"omitempty,oneof=higher_worse lower_worse"`
-	Baseline       *float64 `json:"baseline"`
-	ThresholdMode  string   `json:"thresholdMode" binding:"omitempty,oneof=percent absolute"`
-	WarnLine       *float64 `json:"warnLine"`
-	DangerLine     *float64 `json:"dangerLine"`
-	Remark         string   `json:"remark"`
+	Category         string   `json:"category" binding:"omitempty,max=32"`
+	MetricType       string   `json:"metricType" binding:"omitempty,oneof=usage absolute increment"`
+	Unit             string   `json:"unit" binding:"required"`
+	DsType           string   `json:"dsType" binding:"omitempty,oneof=db log"`
+	CollectMethod    string   `json:"collectMethod" binding:"omitempty,oneof=sql logparse python"`
+	StatMode         string   `json:"statMode" binding:"omitempty,oneof=latest max min avg sum"`
+	JudgeDirection   string   `json:"judgeDirection" binding:"omitempty,oneof=higher_worse lower_worse"`
+	Baseline         *float64 `json:"baseline"`
+	ThresholdMode    string   `json:"thresholdMode" binding:"omitempty,oneof=percent absolute"`
+	WarnLine         *float64 `json:"warnLine"`
+	DangerLine       *float64 `json:"dangerLine"`
+	Remark           string   `json:"remark"`
+}
+
+type optionalFloat struct {
+	value *float64
+	set   bool
+}
+
+func (o *optionalFloat) UnmarshalJSON(data []byte) error {
+	o.set = true
+	if string(data) == "null" {
+		o.value = nil
+		return nil
+	}
+	var value float64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	o.value = &value
+	return nil
 }
 
 func (h *Handler) List(c *gin.Context) {
@@ -104,6 +125,9 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	if v := c.Query("status"); v != "" {
 		q = q.Where("status = ?", v)
+	}
+	if v := strings.TrimSpace(c.Query("category")); v != "" {
+		q = q.Where("category = ?", v)
 	}
 	if v := c.Query("metricKind"); v != "" {
 		q = q.Where("metric_kind = ?", v)
@@ -191,14 +215,19 @@ func (h *Handler) Create(c *gin.Context) {
 	var sysN int64
 	_ = h.db.Model(&persistence.BusinessSystem{}).Where("system_code = ?", req.SystemCode).Count(&sysN).Error
 	if sysN == 0 {
-		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "%s", "归属系统不存在: " + req.SystemCode))
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "%s", "归属系统不存在: "+req.SystemCode))
+		return
+	}
+	categoryName, err := h.resolveCreateMetricCategory(req.ParentCode, req.SystemCode, req.Category)
+	if err != nil {
+		resp.Fail(c, err)
 		return
 	}
 	username, _ := c.Get(middleware.CtxUsername)
 	un, _ := username.(string)
 	m := persistence.CapacityMetric{
 		MetricCode: req.MetricCode, Name: req.Name, SystemCode: req.SystemCode,
-		Category: req.Category, MetricKind: req.MetricKind, StatModule: req.StatModule,
+		Category: categoryName, MetricKind: req.MetricKind, StatModule: req.StatModule,
 		MetricType: req.MetricType, Unit: req.Unit,
 		DsType: req.DsType, CollectMethod: req.CollectMethod, StatMode: req.StatMode,
 		JudgeDirection: req.JudgeDirection, Baseline: req.Baseline,
@@ -227,15 +256,20 @@ func (h *Handler) Create(c *gin.Context) {
 
 func (h *Handler) Update(c *gin.Context) {
 	var req struct {
-		Name             string   `json:"name"`
-		Category         string   `json:"category"`
-		Unit             string   `json:"unit"`
-		StatMode         string   `json:"statMode"`
-		JudgeDirection   string   `json:"judgeDirection"`
-		Baseline         *float64 `json:"baseline"`
-		Remark           string   `json:"remark"`
-		MainModule       *string  `json:"mainModule"`
-		WeightMetricCode *string  `json:"weightMetricCode"`
+		Name             *string       `json:"name" binding:"omitempty,min=1,max=128"`
+		Category         *string       `json:"category" binding:"omitempty,max=32"`
+		Unit             *string       `json:"unit" binding:"omitempty,min=1,max=32"`
+		StatModule       *string       `json:"statModule" binding:"omitempty,max=32"`
+		MetricType       *string       `json:"metricType" binding:"omitempty,oneof=usage absolute increment"`
+		StatMode         *string       `json:"statMode" binding:"omitempty,oneof=latest max min avg sum"`
+		JudgeDirection   *string       `json:"judgeDirection" binding:"omitempty,oneof=higher_worse lower_worse"`
+		ThresholdMode    *string       `json:"thresholdMode" binding:"omitempty,oneof=percent absolute"`
+		Baseline         optionalFloat `json:"baseline"`
+		WarnLine         optionalFloat `json:"warnLine"`
+		DangerLine       optionalFloat `json:"dangerLine"`
+		Remark           *string       `json:"remark" binding:"omitempty,max=512"`
+		MainModule       *string       `json:"mainModule" binding:"omitempty,max=32"`
+		WeightMetricCode *string       `json:"weightMetricCode" binding:"omitempty,max=64"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "参数错误: %v", err))
@@ -247,27 +281,96 @@ func (h *Handler) Update(c *gin.Context) {
 		resp.Fail(c, resp.NewErr(resp.CodeNotFound, "指标不存在"))
 		return
 	}
+	parentCode := ""
+	if m.ParentCode != nil {
+		parentCode = *m.ParentCode
+	}
+	newStatModule := m.StatModule
+	if req.StatModule != nil {
+		if m.MetricKind != "normal" && *req.StatModule != "" {
+			resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "统计模块标识仅普通指标可配置"))
+			return
+		}
+		newStatModule = *req.StatModule
+	}
+	if err := h.validateTree(m.MetricKind, parentCode, newStatModule, m.SystemCode); err != nil {
+		resp.Fail(c, err)
+		return
+	}
+	newDirection := m.JudgeDirection
+	if req.JudgeDirection != nil {
+		newDirection = *req.JudgeDirection
+	}
+	newThresholdMode := m.ThresholdMode
+	if req.ThresholdMode != nil {
+		newThresholdMode = *req.ThresholdMode
+	}
+	newWarnLine, newDangerLine := m.WarnLine, m.DangerLine
+	if req.WarnLine.set {
+		newWarnLine = req.WarnLine.value
+	}
+	if req.DangerLine.set {
+		newDangerLine = req.DangerLine.value
+	}
+	if m.MetricKind == "normal" || newWarnLine != nil || newDangerLine != nil {
+		if err := validateThreshold(newThresholdMode, newDirection, newWarnLine, newDangerLine); err != nil {
+			resp.Fail(c, err)
+			return
+		}
+	}
+	newCategory := strings.TrimSpace(m.Category)
+	if newCategory == "" {
+		newCategory = defaultMetricCategoryName
+	}
+	categoryChanged := false
+	if req.Category != nil {
+		requested, err := h.requireMetricCategory(m.SystemCode, *req.Category)
+		if err != nil {
+			resp.Fail(c, err)
+			return
+		}
+		if requested != newCategory {
+			if m.MetricKind != "aggregate" && m.ParentCode != nil {
+				resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "子指标及统计模块的分类由所属汇总指标统一维护, 不能单独修改"))
+				return
+			}
+			newCategory = requested
+			categoryChanged = true
+		}
+	}
 	updates := map[string]any{}
-	if req.Name != "" {
-		updates["name"] = req.Name
+	if req.Name != nil {
+		updates["name"] = *req.Name
 	}
-	if req.Category != "" {
-		updates["category"] = req.Category
+	if req.Unit != nil {
+		updates["unit"] = *req.Unit
 	}
-	if req.Unit != "" {
-		updates["unit"] = req.Unit
+	if req.StatModule != nil {
+		updates["stat_module"] = newStatModule
 	}
-	if req.StatMode != "" {
-		updates["stat_mode"] = req.StatMode
+	if req.MetricType != nil {
+		updates["metric_type"] = *req.MetricType
 	}
-	if req.JudgeDirection != "" {
-		updates["judge_direction"] = req.JudgeDirection
+	if req.StatMode != nil {
+		updates["stat_mode"] = *req.StatMode
 	}
-	if req.Baseline != nil {
-		updates["baseline"] = *req.Baseline
+	if req.JudgeDirection != nil {
+		updates["judge_direction"] = newDirection
 	}
-	if req.Remark != "" {
-		updates["remark"] = req.Remark
+	if req.ThresholdMode != nil {
+		updates["threshold_mode"] = newThresholdMode
+	}
+	if req.Baseline.set {
+		updates["baseline"] = req.Baseline.value
+	}
+	if req.WarnLine.set {
+		updates["warn_line"] = newWarnLine
+	}
+	if req.DangerLine.set {
+		updates["danger_line"] = newDangerLine
+	}
+	if req.Remark != nil {
+		updates["remark"] = *req.Remark
 	}
 	if req.MainModule != nil {
 		if m.MetricKind != "aggregate" && *req.MainModule != "" {
@@ -283,11 +386,7 @@ func (h *Handler) Update(c *gin.Context) {
 				resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "权重指标仅普通指标(统计模块)可配置"))
 				return
 			}
-			sp := ""
-			if m.ParentCode != nil {
-				sp = *m.ParentCode
-			}
-			if err := h.validateWeight(wc, code, sp, m.SystemCode); err != nil {
+			if err := h.validateWeight(wc, code, parentCode, m.SystemCode); err != nil {
 				resp.Fail(c, err)
 				return
 			}
@@ -298,7 +397,23 @@ func (h *Handler) Update(c *gin.Context) {
 			updates["weight_metric_code"] = wc
 		}
 	}
-	_ = h.db.Model(&m).Updates(updates).Error
+	if categoryChanged {
+		if err := h.db.Transaction(func(tx *gorm.DB) error {
+			if err := h.updateMetricCategoryCascade(tx, code, newCategory); err != nil {
+				return err
+			}
+			if len(updates) == 0 {
+				return nil
+			}
+			return tx.Model(&m).Updates(updates).Error
+		}); err != nil {
+			resp.Fail(c, resp.NewErr(resp.CodeConflict, "更新失败(系统内名称已存在?)"))
+			return
+		}
+	} else if err := h.db.Model(&m).Updates(updates).Error; err != nil {
+		resp.Fail(c, resp.NewErr(resp.CodeConflict, "更新失败(系统内名称已存在?)"))
+		return
+	}
 	middleware.Log(c, "metric", "metric.update", code, "")
 	resp.OK(c, nil)
 }
@@ -504,7 +619,6 @@ func atoiSafe(s string) (int, error) {
 
 var errInvalid = resp.NewErr(resp.CodeBadRequest, "invalid number")
 
-
 // ---------- 汇总指标树 ----------
 
 // validateTree 汇总指标树形校验:
@@ -548,6 +662,44 @@ func (h *Handler) validateTree(kind, parentCode, statModule, systemCode string) 
 	return nil
 }
 
+// resolveCreateMetricCategory 汇总指标自行选择分类, 其下节点统一继承父节点分类。
+func (h *Handler) resolveCreateMetricCategory(parentCode, systemCode, requested string) (string, error) {
+	if parentCode != "" {
+		var parent persistence.CapacityMetric
+		if err := h.db.Where("metric_code = ?", parentCode).First(&parent).Error; err != nil {
+			return "", resp.NewErr(resp.CodeBadRequest, "上级指标不存在: %s", parentCode)
+		}
+		return h.requireMetricCategory(systemCode, parent.Category)
+	}
+	return h.requireMetricCategory(systemCode, requested)
+}
+
+// updateMetricCategoryCascade 汇总指标改分类时同步更新全部后代节点。
+func (h *Handler) updateMetricCategoryCascade(tx *gorm.DB, rootCode, category string) error {
+	codes := []string{rootCode}
+	visited := map[string]bool{rootCode: true}
+	current := []string{rootCode}
+	for len(current) > 0 {
+		var children []string
+		if err := tx.Model(&persistence.CapacityMetric{}).
+			Where("parent_code IN ?", current).Pluck("metric_code", &children).Error; err != nil {
+			return err
+		}
+		next := make([]string, 0, len(children))
+		for _, code := range children {
+			if visited[code] {
+				continue
+			}
+			visited[code] = true
+			codes = append(codes, code)
+			next = append(next, code)
+		}
+		current = next
+	}
+	return tx.Model(&persistence.CapacityMetric{}).
+		Where("metric_code IN ?", codes).Update("category", category).Error
+}
+
 // validateWeight 权重指标校验: 存在/同系统/仅普通/非自身/同一父级下同级(加权均值口径: 如平均耗时按请求量加权)
 func (h *Handler) validateWeight(weightCode, selfCode, selfParentCode, systemCode string) error {
 	if weightCode == "" {
@@ -580,6 +732,12 @@ type metricTreeNode struct {
 	Children []*metricTreeNode `json:"children,omitempty"`
 }
 
+type metricCategoryTree struct {
+	Category string            `json:"category"`
+	Count    int               `json:"count"`
+	Roots    []*metricTreeNode `json:"roots"`
+}
+
 func metricKindRank(kind string) int {
 	switch kind {
 	case "aggregate":
@@ -601,11 +759,22 @@ func sortTreeNodes(ns []*metricTreeNode) {
 	})
 }
 
+func treeNodeCount(n *metricTreeNode) int {
+	count := 1
+	for _, child := range n.Children {
+		count += treeNodeCount(child)
+	}
+	return count
+}
+
 // Tree 指标树(汇总指标 -> 子指标分组 -> 统计模块; 独立普通指标平铺为顶层节点)
 func (h *Handler) Tree(c *gin.Context) {
 	q := h.db.Model(&persistence.CapacityMetric{})
 	if v := c.Query("systemCode"); v != "" {
 		q = q.Where("system_code = ?", v)
+	}
+	if v := strings.TrimSpace(c.Query("category")); v != "" {
+		q = q.Where("category = ?", v)
 	}
 	if kw := c.Query("keyword"); kw != "" {
 		q = q.Where("name LIKE ? OR metric_code LIKE ?", "%"+kw+"%", "%"+kw+"%")
@@ -635,7 +804,28 @@ func (h *Handler) Tree(c *gin.Context) {
 	for _, n := range nodes {
 		sortTreeNodes(n.Children)
 	}
-	resp.OK(c, gin.H{"roots": roots, "count": len(items)})
+	groupsByCategory := map[string]*metricCategoryTree{}
+	for _, root := range roots {
+		category := strings.TrimSpace(root.Category)
+		if category == "" {
+			category = defaultMetricCategoryName
+		}
+		group := groupsByCategory[category]
+		if group == nil {
+			group = &metricCategoryTree{Category: category, Roots: []*metricTreeNode{}}
+			groupsByCategory[category] = group
+		}
+		group.Roots = append(group.Roots, root)
+		group.Count += treeNodeCount(root)
+	}
+	categories := make([]*metricCategoryTree, 0, len(groupsByCategory))
+	for _, group := range groupsByCategory {
+		categories = append(categories, group)
+	}
+	sort.Slice(categories, func(i, j int) bool {
+		return categories[i].Category < categories[j].Category
+	})
+	resp.OK(c, gin.H{"categories": categories, "roots": roots, "count": len(items)})
 }
 
 // parseTrendRange 解析 days 或 from/to 区间(与 data.Trend 口径一致)
@@ -744,7 +934,12 @@ func (h *Handler) Modules(c *gin.Context) {
 			resp.Fail(c, err)
 			return
 		}
-		out = h.buildModuleViews(code, leaves, rows)
+		moduleModes, merr := persistence.MetricStatModuleModes(h.db, code)
+		if merr != nil {
+			resp.Fail(c, merr)
+			return
+		}
+		out = h.buildModuleViews(code, leaves, rows, moduleModes)
 	}
 	resp.OK(c, gin.H{
 		"metricCode": code, "name": m.Name, "metricKind": m.MetricKind,
@@ -754,13 +949,110 @@ func (h *Handler) Modules(c *gin.Context) {
 	})
 }
 
+// UpdateModule 配置汇总指标下某个统计模块的跨子指标汇总方式。
+func (h *Handler) UpdateModule(c *gin.Context) {
+	code := c.Param("code")
+	moduleKey := strings.TrimSpace(c.Param("module"))
+	if moduleKey == "" {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "统计模块标识不能为空"))
+		return
+	}
+	var req struct {
+		AggMode string `json:"aggMode" binding:"required,oneof=sum max min avg weighted_avg"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "参数错误: %v", err))
+		return
+	}
+	var m persistence.CapacityMetric
+	if err := h.db.Where("metric_code = ?", code).First(&m).Error; err != nil {
+		resp.Fail(c, resp.NewErr(resp.CodeNotFound, "指标不存在"))
+		return
+	}
+	if !scope.Contains(scope.Systems(c.Request.Context(), h.db, h.az, scope.Username(c)), m.SystemCode) {
+		scope.Forbidden(c, m.SystemCode)
+		return
+	}
+	if m.MetricKind != "aggregate" {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "仅汇总指标支持配置统计模块汇总方式"))
+		return
+	}
+	if req.AggMode == "weighted_avg" {
+		leaves, err := h.moduleLeaves(code, moduleKey)
+		if err != nil {
+			resp.Fail(c, err)
+			return
+		}
+		if len(leaves) == 0 {
+			resp.Fail(c, resp.NewErr(resp.CodeUnprocessable, "统计模块下暂无普通指标, 无法配置加权平均"))
+			return
+		}
+		for i := range leaves {
+			if leaves[i].WeightMetricCode == nil || strings.TrimSpace(*leaves[i].WeightMetricCode) == "" {
+				resp.Fail(c, resp.NewErr(resp.CodeUnprocessable,
+					"加权平均要求统计模块内每个普通指标都配置权重指标: %s", leaves[i].MetricCode))
+				return
+			}
+		}
+	}
+	row := persistence.MetricStatModule{
+		AggregateCode: code,
+		ModuleKey:     moduleKey,
+		AggMode:       req.AggMode,
+	}
+	if err := h.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "aggregate_code"}, {Name: "module_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"agg_mode", "updated_at",
+		}),
+	}).Create(&row).Error; err != nil {
+		resp.Fail(c, err)
+		return
+	}
+	middleware.Log(c, "metric", "metric.module_config", code, "module="+moduleKey)
+	resp.OK(c, row)
+}
+
+func (h *Handler) moduleLeaves(aggregateCode, moduleKey string) ([]persistence.CapacityMetric, error) {
+	var leaves []persistence.CapacityMetric
+	if err := h.db.Where("parent_code = ? AND metric_kind = 'normal'", aggregateCode).
+		Order("metric_code").Find(&leaves).Error; err != nil {
+		return nil, err
+	}
+	var groupCodes []string
+	if err := h.db.Model(&persistence.CapacityMetric{}).
+		Where("parent_code = ? AND metric_kind = 'group'", aggregateCode).
+		Pluck("metric_code", &groupCodes).Error; err != nil {
+		return nil, err
+	}
+	if len(groupCodes) > 0 {
+		var subs []persistence.CapacityMetric
+		if err := h.db.Where("parent_code IN ? AND metric_kind = 'normal'", groupCodes).
+			Order("metric_code").Find(&subs).Error; err != nil {
+			return nil, err
+		}
+		leaves = append(leaves, subs...)
+	}
+	out := leaves[:0]
+	for i := range leaves {
+		key := leaves[i].StatModule
+		if key == "" {
+			key = leaves[i].MetricCode
+		}
+		if key == moduleKey {
+			out = append(out, leaves[i])
+		}
+	}
+	return out, nil
+}
+
 type modChild struct {
-	Code     string   `json:"code"`
-	Name     string   `json:"name"`
-	Unit     string   `json:"unit"`
-	StatMode string   `json:"statMode"`
-	Weighted bool     `json:"weighted"`
-	Latest   *float64 `json:"latest"`
+	Code     string     `json:"code"`
+	Name     string     `json:"name"`
+	Unit     string     `json:"unit"`
+	StatMode string     `json:"statMode"`
+	Weighted bool       `json:"weighted"`
+	Latest   *float64   `json:"latest"`
 	LatestTs *time.Time `json:"latestTs"`
 }
 
@@ -778,14 +1070,14 @@ type modRangeStats struct {
 }
 
 type moduleView struct {
-	Module   string       `json:"module"`
-	Name     string       `json:"name"`
-	Unit     string       `json:"unit"`
-	AggMode  string       `json:"aggMode"` // self/sum/max/avg/min/weighted_avg
-	Children []modChild   `json:"children"`
-	Latest   *float64     `json:"latest"`
-	LatestTs *time.Time   `json:"latestTs"`
-	Series   []modPoint   `json:"series"`
+	Module   string        `json:"module"`
+	Name     string        `json:"name"`
+	Unit     string        `json:"unit"`
+	AggMode  string        `json:"aggMode"` // self/sum/max/avg/min/weighted_avg
+	Children []modChild    `json:"children"`
+	Latest   *float64      `json:"latest"`
+	LatestTs *time.Time    `json:"latestTs"`
+	Series   []modPoint    `json:"series"`
 	Stats    modRangeStats `json:"stats"`
 }
 
@@ -797,7 +1089,7 @@ func (h *Handler) buildModuleViews(code string, leaves []persistence.CapacityMet
 	MetricCode string    `gorm:"column:metric_code"`
 	Ts         time.Time `gorm:"column:ts"`
 	Value      *float64  `gorm:"column:value"`
-}) []moduleView {
+}, moduleModes map[string]string) []moduleView {
 	type moduleAgg struct {
 		key    string
 		leaves []persistence.CapacityMetric
@@ -828,7 +1120,7 @@ func (h *Handler) buildModuleViews(code string, leaves []persistence.CapacityMet
 			statModes[i] = l.StatMode
 			weights[i] = l.WeightMetricCode
 		}
-		mode := metricagg.Mode(statModes, weights)
+		mode := metricagg.Mode(moduleModes[key], statModes, weights)
 		// 参与查询的编码: 叶子指标 + 其权重指标
 		codeSet := map[string]bool{}
 		for _, l := range mg.leaves {

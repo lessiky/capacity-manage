@@ -53,7 +53,8 @@ func newEngineHarness(t *testing.T, col CollectorRunner, cleanConfig string) *en
 	h.Migrate(&persistence.CollectFlow{}, &persistence.CapacityMetric{}, &persistence.DataSource{},
 		&persistence.CollectTaskLog{}, &persistence.CleaningTrace{}, &persistence.MetricValueRT{},
 		&persistence.MetricValueDay{}, &persistence.MetricPeakStat{}, &persistence.AlertRecord{},
-		&persistence.TradingDayCalendar{}, &persistence.BusinessSystem{}, &persistence.SysParam{})
+		&persistence.TradingDayCalendar{}, &persistence.BusinessSystem{}, &persistence.SysParam{},
+		&persistence.FlowVariable{})
 	// 系统参数: 重试 3 次 / 间隔 0s（测试加速）
 	for _, p := range []persistence.SysParam{
 		{Key: "collect_retry_max", Value: "3"},

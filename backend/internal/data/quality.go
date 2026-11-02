@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"time"
 
@@ -110,8 +111,18 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 		return QualityResult{}, err
 	}
 	start, end := normalizeRange(from, to)
-	days := daysBetween(start, end)
-	rows := make([]persistence.MetricQualityDay, 0, days)
+	bizDates, err := s.qualityBizDates(ctx, metricCode, start, end)
+	if err != nil {
+		return QualityResult{}, err
+	}
+	if len(bizDates) == 0 {
+		// 指定范围内没有该指标应生产数据的交易日，返回中性结果且不落质量行。
+		return QualityResult{
+			Score: 1, Completeness: 1, Timeliness: 1, Freshness: 1,
+			Flags: []string{}, Days: []persistence.MetricQualityDay{},
+		}, nil
+	}
+	rows := make([]persistence.MetricQualityDay, 0, len(bizDates))
 	latest := time.Time{}
 	totalPoints, anomalyPoints, duplicatePoints := 0, 0, 0
 	validDays, timelyDays := 0, 0
@@ -120,8 +131,7 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 		timelyHours = s.params.Int("quality_timely_hours", 24)
 	}
 
-	for i := 0; i < days; i++ {
-		bizDate := start.AddDate(0, 0, i)
+	for _, bizDate := range bizDates {
 		day, err := s.evaluateDay(ctx, &metric, bizDate, timelyHours)
 		if err != nil {
 			return QualityResult{}, err
@@ -140,9 +150,9 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 	}
 
 	result := CalculateQuality(QualityInput{
-		RangeDays: days, ValidDays: validDays, TimelyDays: timelyDays,
+		RangeDays: len(bizDates), ValidDays: validDays, TimelyDays: timelyDays,
 		TotalPoints: totalPoints, AnomalyPoints: anomalyPoints, DuplicatePoints: duplicatePoints,
-		LatestBizDate: latest, RangeEnd: end,
+		LatestBizDate: latest, RangeEnd: bizDates[len(bizDates)-1],
 	})
 	result.Days = rows
 	for i := range rows {
@@ -157,6 +167,59 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 		}
 	}
 	return result, nil
+}
+
+func (s *QualityService) qualityBizDates(ctx context.Context, metricCode string, start, end time.Time) ([]time.Time, error) {
+	naturalDates := make([]time.Time, 0, daysBetween(start, end))
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		naturalDates = append(naturalDates, d)
+	}
+
+	var flow persistence.CollectFlow
+	err := s.db.WithContext(ctx).Where("metric_code = ?", metricCode).First(&flow).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return naturalDates, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if flow.ScheduleMode != "trading_day" {
+		return naturalDates, nil
+	}
+	mode := flow.BizDateMode
+	if mode == "" {
+		mode = "natural"
+	}
+	if mode != "calendar" && mode != "natural" {
+		return naturalDates, nil
+	}
+
+	market := flow.TradingMarket
+	if market == "" {
+		market = "SH"
+	}
+	var calendars []persistence.TradingDayCalendar
+	if err := s.db.WithContext(ctx).
+		Where("market = ? AND cal_date >= ? AND cal_date <= ?", market, start, end).
+		Find(&calendars).Error; err != nil {
+		return nil, err
+	}
+	tradingByDate := make(map[string]bool, len(calendars))
+	for i := range calendars {
+		tradingByDate[calendars[i].CalDate.Format("2006-01-02")] = calendars[i].IsTrading
+	}
+
+	out := make([]time.Time, 0, len(naturalDates))
+	for _, d := range naturalDates {
+		isTrading, ok := tradingByDate[d.Format("2006-01-02")]
+		if !ok {
+			isTrading = d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
+		}
+		if isTrading {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 func (s *QualityService) evaluateDay(ctx context.Context, metric *persistence.CapacityMetric,
@@ -214,7 +277,10 @@ func (s *QualityService) evaluateDay(ctx context.Context, metric *persistence.Ca
 	}
 	timely := 0.0
 	if valid > 0 && !firstAt.IsZero() {
-		if firstAt.Sub(dayStart) <= time.Duration(timelyHours)*time.Hour {
+		// prev_day/calendar 流程会在业务日之后的凌晨采集, 因此及时性窗口
+		// 从业务日结束时刻起算, 而不是从业务日 00:00 起算。
+		deadline := dayEnd.Add(time.Duration(timelyHours) * time.Hour)
+		if !firstAt.After(deadline) {
 			timely = 1
 		}
 	}

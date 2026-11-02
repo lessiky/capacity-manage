@@ -8,20 +8,23 @@ func sp(s string) *string { return &s }
 
 func TestMode(t *testing.T) {
 	cases := []struct {
-		name    string
-		modes   []string
-		weights []*string
-		want    string
+		name     string
+		override string
+		modes    []string
+		weights  []*string
+		want     string
 	}{
-		{"single leaf", []string{"sum"}, nil, "self"},
-		{"no weight sum", []string{"sum", "sum"}, nil, "sum"},
-		{"no weight first stat mode", []string{"max", "avg"}, nil, "max"},
-		{"latest falls back max", []string{"latest", "latest"}, nil, "max"},
-		{"any weight wins", []string{"avg", "avg"}, []*string{nil, sp("W")}, "weighted_avg"},
-		{"empty weight string ignored", []string{"sum", "sum"}, []*string{sp(""), nil}, "sum"},
+		{"single leaf ignores override", "sum", []string{"sum"}, nil, "self"},
+		{"no weight sum", "", []string{"sum", "sum"}, nil, "sum"},
+		{"no weight first stat mode", "", []string{"max", "avg"}, nil, "max"},
+		{"latest falls back max", "", []string{"latest", "latest"}, nil, "max"},
+		{"any weight wins", "", []string{"avg", "avg"}, []*string{nil, sp("W")}, "weighted_avg"},
+		{"empty weight string ignored", "", []string{"sum", "sum"}, []*string{sp(""), nil}, "sum"},
+		{"override latest leaves as sum", "sum", []string{"latest", "latest"}, nil, "sum"},
+		{"override wins over legacy", "max", []string{"avg", "avg"}, nil, "max"},
 	}
 	for _, c := range cases {
-		if got := Mode(c.modes, c.weights); got != c.want {
+		if got := Mode(c.override, c.modes, c.weights); got != c.want {
 			t.Fatalf("%s: Mode = %s, want %s", c.name, got, c.want)
 		}
 	}

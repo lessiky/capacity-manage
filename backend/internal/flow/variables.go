@@ -10,7 +10,7 @@ import (
 	"capacity-manage/backend/internal/tradingday"
 )
 
-var varPattern = regexp.MustCompile(`\$\{([a-z_]+)(?::([0-9A-Za-z_:/.-]+))?\}`)
+var varPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(?::([0-9A-Za-z_:/.-]+))?\}`)
 
 // ResolveVars 变量替换引擎（docs/10-design/05 §6）
 // 支持: ${biz_date} ${prev_trading_day} ${next_trading_day} ${trading_day_offset:N}

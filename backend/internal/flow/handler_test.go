@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +65,7 @@ func TestDeleteScriptReferenceBlock(t *testing.T) {
 	if err := h.DB.Create(&persistence.CollectFlow{
 		FlowCode: "f-clean", MetricCode: "m2", DataSourceID: int64Ptr(1), CollectType: "sql",
 		CollectConfig: `{"sqlTemplate":"SELECT 1"}`,
-		CleanConfig: `{"script":{"scriptId":` + fmt.Sprint(s2.ID) + `}}`, Status: "active",
+		CleanConfig:   `{"script":{"scriptId":` + fmt.Sprint(s2.ID) + `}}`, Status: "active",
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -323,5 +323,114 @@ func TestValidatePythonFlowWithoutDataSource(t *testing.T) {
 	}
 	if err := hh.validate(req("sql", `{"sqlTemplate":"SELECT 1"}`, nil)); err == nil || !strings.Contains(err.Error(), "须且仅可选择一项") {
 		t.Fatalf("sql 采集不绑数据源应被拒: %v", err)
+	}
+}
+
+func TestValidateInfluxQLFlowRequiresInfluxDBDataSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.CapacityMetric{}, &persistence.DataSource{}, &persistence.CollectFlow{})
+	hh := &Handler{db: h.DB}
+
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "M1", Name: "m1", SystemCode: "S1", MetricType: "usage", Unit: "%", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	relational := persistence.DataSource{Name: "mysql", Type: "db", Status: "available", Config: "{}"}
+	influx := persistence.DataSource{Name: "influx", Type: "influxdb", Status: "available", Config: "{}"}
+	for _, ds := range []*persistence.DataSource{&relational, &influx} {
+		if err := h.DB.Create(ds).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := func(dsID *int64) *flowReq {
+		return &flowReq{
+			FlowCode: "f1", Name: "f1", MetricCode: "M1", DataSourceID: dsID,
+			CollectType:   "influxql",
+			CollectConfig: json.RawMessage(`{"queryTemplate":"SELECT mean(\"usage\") FROM \"cpu\"","aggregate":"single"}`),
+			ScheduleMode:  "normal", CronExpr: "0 * * * *",
+		}
+	}
+
+	if err := hh.validate(req(&relational.ID)); err == nil || !strings.Contains(err.Error(), "influxdb") {
+		t.Fatalf("InfluxQL 绑定关系库应被拒: %v", err)
+	}
+	if err := hh.validate(req(&influx.ID)); err != nil {
+		t.Fatalf("InfluxQL 绑定 InfluxDB 应通过: %v", err)
+	}
+}
+
+func TestCreateFlowAcceptsInfluxQL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.CapacityMetric{}, &persistence.DataSource{}, &persistence.CollectFlow{})
+	hh := &Handler{db: h.DB}
+
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "M1", Name: "m1", SystemCode: "S1", MetricType: "usage", Unit: "%", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ds := persistence.DataSource{Name: "influx", Type: "influxdb", Status: "available", Config: "{}"}
+	if err := h.DB.Create(&ds).Error; err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{
+		"flowCode":"f1","name":"influx flow","metricCode":"M1","dataSourceId":%d,
+		"collectType":"influxql",
+		"collectConfig":{"queryTemplate":"SELECT mean(\"usage\") FROM \"cpu\"","valueColumn":"usage","aggregate":"avg"},
+		"scheduleMode":"normal","cronExpr":"0 * * * *"
+	}`, ds.ID)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/flows", strings.NewReader(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	hh.Create(c)
+
+	var body resp.Body
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not json: %v %s", err, w.Body.String())
+	}
+	if body.Code != resp.CodeOK {
+		t.Fatalf("create response: %+v", body)
+	}
+	var flow persistence.CollectFlow
+	if err := h.DB.Where("flow_code = ?", "f1").First(&flow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if flow.CollectType != "influxql" {
+		t.Fatalf("collectType = %q", flow.CollectType)
+	}
+}
+
+func TestValidateInfluxQLFlowChecksQueryConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.CapacityMetric{}, &persistence.DataSource{}, &persistence.CollectFlow{})
+	hh := &Handler{db: h.DB}
+
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "M1", Name: "m1", SystemCode: "S1", MetricType: "usage", Unit: "%", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ds := persistence.DataSource{Name: "influx", Type: "influxdb", Status: "available", Config: "{}"}
+	if err := h.DB.Create(&ds).Error; err != nil {
+		t.Fatal(err)
+	}
+	req := func(cfg string) *flowReq {
+		return &flowReq{
+			FlowCode: "f1", Name: "f1", MetricCode: "M1", DataSourceID: &ds.ID,
+			CollectType: "influxql", CollectConfig: json.RawMessage(cfg),
+			ScheduleMode: "normal", CronExpr: "0 * * * *",
+		}
+	}
+
+	if err := hh.validate(req(`{"aggregate":"avg"}`)); err == nil || !strings.Contains(err.Error(), "queryTemplate") {
+		t.Fatalf("缺少 queryTemplate 应被拒: %v", err)
+	}
+	if err := hh.validate(req(`{"queryTemplate":"SHOW MEASUREMENTS","aggregate":"median"}`)); err == nil || !strings.Contains(err.Error(), "聚合") {
+		t.Fatalf("非法聚合方式应被拒: %v", err)
 	}
 }

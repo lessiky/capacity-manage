@@ -18,11 +18,11 @@ import (
 )
 
 type Handler struct {
-	db     *gorm.DB
-	cred   *Registry
-	az     *middleware.AuthZ
-	cfg    *config.Config
-	log    *slog.Logger
+	db   *gorm.DB
+	cred *Registry
+	az   *middleware.AuthZ
+	cfg  *config.Config
+	log  *slog.Logger
 }
 
 func NewHandler(db *gorm.DB, cred *Registry, az *middleware.AuthZ, cfg *config.Config, log *slog.Logger) *Handler {
@@ -31,7 +31,7 @@ func NewHandler(db *gorm.DB, cred *Registry, az *middleware.AuthZ, cfg *config.C
 
 type dsReq struct {
 	Name       string          `json:"name" binding:"required"`
-	Type       string          `json:"type" binding:"required,oneof=db log ssh"`
+	Type       string          `json:"type" binding:"required,oneof=db log ssh influxdb"`
 	SystemCode string          `json:"systemCode" binding:"required"`
 	CategoryID int64           `json:"categoryId" binding:"required"`
 	Config     json.RawMessage `json:"config" binding:"required"`
@@ -304,6 +304,23 @@ func (h *Handler) normalizeConfig(t string, raw json.RawMessage) ([]byte, error)
 			} else {
 				cfg.TempDir = "/tmp"
 			}
+		}
+		if cfg.Password != "" {
+			enc, err := h.cred.cipher.Encrypt(cfg.Password)
+			if err != nil {
+				return nil, resp.NewErr(resp.CodeInternal, "凭据加密失败")
+			}
+			cfg.Password = enc
+		}
+	case "influxdb":
+		if cfg.Host == "" || cfg.Database == "" {
+			return nil, resp.NewErr(resp.CodeBadRequest, "influxdb 数据源须配置 host/database")
+		}
+		if cfg.Port == 0 {
+			cfg.Port = defaultInfluxDBPort
+		}
+		if cfg.Password != "" && cfg.Username == "" {
+			return nil, resp.NewErr(resp.CodeBadRequest, "influxdb 使用认证时须同时配置 username/password")
 		}
 		if cfg.Password != "" {
 			enc, err := h.cred.cipher.Encrypt(cfg.Password)

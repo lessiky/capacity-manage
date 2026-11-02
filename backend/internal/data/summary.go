@@ -14,8 +14,18 @@ import (
 	"gorm.io/gorm"
 )
 
-// RunDailySummary 日汇总执行（幂等, 由 scheduler 注入调用）
+// RunDailySummary 手工日汇总执行（幂等, 尊重用户指定的业务日）。
 func RunDailySummary(ctx context.Context, db *gorm.DB, log *slog.Logger, params *system.Params, cal *tradingday.Calendar, bizDate time.Time) {
+	runDailySummary(ctx, db, log, params, cal, bizDate, nil)
+}
+
+// RunScheduledDailySummary 自动日汇总执行: trading_day 流程按最近一次已完成
+// 调度推导业务日, 避免非交易日被误写成缺数。
+func RunScheduledDailySummary(ctx context.Context, db *gorm.DB, log *slog.Logger, params *system.Params, cal *tradingday.Calendar, bizDate, asOf time.Time) {
+	runDailySummary(ctx, db, log, params, cal, bizDate, &asOf)
+}
+
+func runDailySummary(ctx context.Context, db *gorm.DB, log *slog.Logger, params *system.Params, cal *tradingday.Calendar, bizDate time.Time, scheduledAt *time.Time) {
 	now := time.Now()
 	log.Info("daily summary start", slog.String("bizDate", bizDate.Format("2006-01-02")))
 	_ = db.Exec("DELETE FROM daily_summary_log WHERE biz_date = ?", bizDate).Error
@@ -25,10 +35,20 @@ func RunDailySummary(ctx context.Context, db *gorm.DB, log *slog.Logger, params 
 	store := NewStore(db)
 	alertSvc := alert.New(db, params, nil)
 	dep := &SummaryDeps{Judge: judge.New(params, db), Cal: cal, Alerts: alertSvc}
-	done, missing, err := store.SummarizeDay(ctx, bizDate, dep)
+	var done, missing int
+	var bizDates []time.Time
+	var err error
+	if scheduledAt == nil {
+		done, missing, err = store.SummarizeDay(ctx, bizDate, dep)
+		bizDates = []time.Time{bizDate}
+	} else {
+		done, missing, bizDates, err = store.SummarizeScheduledDay(ctx, bizDate, *scheduledAt, dep)
+	}
 	if err == nil {
-		replayActiveEscalations(ctx, db, alertSvc, bizDate)
-		RunDailyQuality(ctx, db, params, log, bizDate)
+		for _, actualBizDate := range bizDates {
+			replayActiveEscalations(ctx, db, alertSvc, actualBizDate)
+			RunDailyQuality(ctx, db, params, log, actualBizDate)
+		}
 	}
 	fin := time.Now()
 	updates := map[string]any{"finished_at": fin}

@@ -45,6 +45,20 @@ func callDelete(t *testing.T, h *Handler, code string) resp.Body {
 	return body
 }
 
+func callCreate(t *testing.T, h *Handler, body string) resp.Body {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/systems", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Create(c)
+	var out resp.Body
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response not json: %v %s", err, w.Body.String())
+	}
+	return out
+}
+
 func mustCreate(t *testing.T, db *testutil.DBHarness, v any) {
 	t.Helper()
 	if err := db.DB.Create(v).Error; err != nil {
@@ -69,6 +83,23 @@ func callResources(t *testing.T, h *Handler, code, method, body string) resp.Bod
 		t.Fatalf("response not json: %v %s", err, w.Body.String())
 	}
 	return out
+}
+
+// 前端 el-date-picker 提交 "YYYY-MM-DD"; 若按 time.Time 直接绑定会报 40001。
+func TestCreateSystemAcceptsDateOnlyOnlineDate(t *testing.T) {
+	h, db := newTestHandler(t)
+	body := callCreate(t, h, `{"systemCode":"S1","name":"系统1","owner":"u","level":"general","onlineDate":"2026-10-26"}`)
+	if body.Code != resp.CodeOK {
+		t.Fatalf("create system: %+v", body)
+	}
+
+	var system persistence.BusinessSystem
+	if err := db.DB.Where("system_code = ?", "S1").First(&system).Error; err != nil {
+		t.Fatalf("load system: %v", err)
+	}
+	if system.OnlineDate == nil || system.OnlineDate.Format("2006-01-02") != "2026-10-26" {
+		t.Fatalf("onlineDate = %v, want 2026-10-26", system.OnlineDate)
+	}
 }
 
 // 前端资源表单按 resType/address 读写, 字段名一旦漂移会静默丢数据。

@@ -101,6 +101,23 @@ func TestOnThresholdMerges(t *testing.T) {
 	}
 }
 
+func TestOnMissingRecoveredClosesActiveAlert(t *testing.T) {
+	h, svc := newAlertHarness(t)
+	m := &persistence.CapacityMetric{MetricCode: "M_MISSING", SystemCode: "SYS_MISSING"}
+	bizDate := time.Date(2026, 10, 16, 0, 0, 0, 0, time.Local)
+
+	svc.OnMissing(context.Background(), m, bizDate)
+	svc.OnMissingRecovered(context.Background(), m, bizDate)
+
+	var rec persistence.AlertRecord
+	if err := h.DB.Where("metric_code = ? AND alert_type = ?", m.MetricCode, "missing").First(&rec).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rec.Status != "recovered" || rec.RecoveredAt == nil {
+		t.Fatalf("alert status = %q recoveredAt=%v, want recovered", rec.Status, rec.RecoveredAt)
+	}
+}
+
 // 日汇总/补采以业务日 00:00 回放判定, 该时刻早于实时触发时刻,
 // 持续时间不得因此倒退。
 func TestOnThresholdDurationIgnoresBusinessDayReplay(t *testing.T) {

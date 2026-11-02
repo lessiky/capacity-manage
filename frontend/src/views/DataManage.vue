@@ -270,19 +270,23 @@ import { Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { http } from '@/api/http'
 import { fmtTs } from '@/utils/format'
+import { loadActiveFlowOptions } from '@/utils/flowOptions'
+import { loadAllMetricOptions, type MetricOption } from '@/utils/metricOptions'
 
 const tab = ref('day')
-const metrics = ref<Record<string, any>[]>([])
+const metrics = ref<MetricOption[]>([])
 const flows = ref<Record<string, any>[]>([])
 
 async function loadMetrics() {
-  const d = (await http.get('/api/v1/metrics', { params: { pageSize: 500 } })) as any
-  metrics.value = d.items ?? []
+  metrics.value = await loadAllMetricOptions(async (params) => {
+    return (await http.get('/api/v1/metrics', { params })) as unknown as { items: MetricOption[]; total: number }
+  })
 }
 
 async function loadFlows() {
-  const d = (await http.get('/api/v1/flows', { params: { pageSize: 500, status: 'active' } })) as any
-  flows.value = d.items ?? []
+  flows.value = await loadActiveFlowOptions(async (params) => {
+    return (await http.get('/api/v1/flows', { params })) as unknown as { items: Record<string, any>[]; total: number }
+  })
 }
 
 // ---------- 日数据 ----------

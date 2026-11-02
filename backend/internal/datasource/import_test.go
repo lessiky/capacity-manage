@@ -267,6 +267,35 @@ func TestImportDataSourcesAcceptsJSONArray(t *testing.T) {
 	}
 }
 
+func TestImportDataSourcesAcceptsInfluxDB(t *testing.T) {
+	h, db, cipher := newImportHandler(t)
+	doc := strings.Join([]string{
+		dsCSVHeader + ",secure",
+		csvLine("pay-influx-01", "influxdb", "PAY", "核心库", "", "10.0.0.8", "8086", "capacity", "", "cap", "secret", "", "", "", "", "", "true"),
+	}, "\n")
+
+	out := runImport(t, h, doc)
+	if out.Data.Success != 1 || out.Data.Failed != 0 {
+		t.Fatalf("summary: %+v errors=%+v", out.Data, out.Data.Errors)
+	}
+	var row persistence.DataSource
+	if err := db.Where("name = ?", "pay-influx-01").First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	var saved Config
+	if err := json.Unmarshal([]byte(row.Config), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Type != "influxdb" || saved.Host != "10.0.0.8" || saved.Port != 8086 ||
+		saved.Database != "capacity" || !saved.Secure {
+		t.Fatalf("config = %+v", saved)
+	}
+	plain, err := cipher.Decrypt(saved.Password)
+	if err != nil || plain != "secret" {
+		t.Fatalf("password not encrypted: %q err=%v", saved.Password, err)
+	}
+}
+
 // Import 未上传文件且请求体不是 JSON 数组时返回 400 而非 panic
 func TestImportDataSourcesRejectsEmptyRequest(t *testing.T) {
 	h, _, _ := newImportHandler(t)

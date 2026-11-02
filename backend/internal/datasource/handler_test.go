@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/aesgcm"
+	"capacity-manage/backend/internal/pkg/resp"
+	"capacity-manage/backend/internal/testutil"
+
+	"github.com/gin-gonic/gin"
 )
 
 const testCredKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -44,7 +51,7 @@ func TestMergeConfigBlankPasswordKeepsOldCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + oldEnc + `"`) }
+	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + oldEnc + `"`)}
 	merged, err := h.mergeConfig(src, []byte(`{"driver":"oracle","host":"10.1.1.2","port":1521,"service":"ORCL","username":"scott"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +66,7 @@ func TestMergeConfigBlankPasswordKeepsOldCiphertext(t *testing.T) {
 func TestMergeConfigMaskedPasswordKeepsOldCiphertext(t *testing.T) {
 	h, cipher := newTestHandler(t)
 	oldEnc, _ := cipher.Encrypt("tiger")
-	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + oldEnc + `"`) }
+	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + oldEnc + `"`)}
 	merged, err := h.mergeConfig(src, []byte(`{"driver":"oracle","host":"10.1.1.2","port":1521,"service":"ORCL","username":"scott","password":"******"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +79,7 @@ func TestMergeConfigMaskedPasswordKeepsOldCiphertext(t *testing.T) {
 // 新密码 => 加密后落库, 解密回原文
 func TestMergeConfigNewPasswordEncrypted(t *testing.T) {
 	h, cipher := newTestHandler(t)
-	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + func() string { e, _ := cipher.Encrypt("old"); return e }() + `"`) }
+	src := &persistence.DataSource{Config: oracleCfgJSON(`,"password":"` + func() string { e, _ := cipher.Encrypt("old"); return e }() + `"`)}
 	merged, err := h.mergeConfig(src, []byte(`{"driver":"oracle","host":"10.1.1.1","port":1521,"service":"ORCL","username":"scott","password":"tiger2"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +144,21 @@ func TestDecryptForCollectSSH(t *testing.T) {
 	}
 }
 
+func TestDecryptForCollectInfluxDB(t *testing.T) {
+	h, cipher := newTestHandler(t)
+	enc, err := cipher.Encrypt("influx-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Type: "influxdb", Password: enc}
+	if err := h.cred.DecryptForCollect(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Password != "influx-secret" {
+		t.Fatalf("influxdb 密码未解密: %q", cfg.Password)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -197,6 +219,26 @@ func TestNormalizeConfigSSHDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigInfluxDBDefaultsAndEncryptsPassword(t *testing.T) {
+	h, cipher := newTestHandler(t)
+	out, err := h.normalizeConfig("influxdb", json.RawMessage(
+		`{"host":"10.1.1.20","database":"capacity","username":"cap","password":"secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Type != "influxdb" || cfg.Port != 8086 {
+		t.Fatalf("defaults: %+v", cfg)
+	}
+	plain, err := cipher.Decrypt(cfg.Password)
+	if err != nil || plain != "secret" {
+		t.Fatalf("password not encrypted: %q err=%v", cfg.Password, err)
+	}
+}
+
 // 执行目标连接测试: 探测临时目录可写(建目录→删目录), 命令按 OS 区分
 func TestSSHProbeCommand(t *testing.T) {
 	got := sshProbeCommand("linux", "/data/tmp")
@@ -232,5 +274,52 @@ func TestRegistryTestDispatchesSSH(t *testing.T) {
 	}
 	if !strings.Contains(res.Message, "SSH") {
 		t.Fatalf("错误信息应说明 SSH 连接问题: %s", res.Message)
+	}
+}
+
+func TestCreateDataSourceAcceptsInfluxDB(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.DataSourceCategory{}, &persistence.DataSource{})
+	if err := h.DB.Create(&persistence.BusinessSystem{SystemCode: "PAY", Name: "支付"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cat := persistence.DataSourceCategory{SystemCode: "PAY", Name: "指标库"}
+	if err := h.DB.Create(&cat).Error; err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := aesgcm.New(testCredKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hh := &Handler{db: h.DB, cred: NewRegistry(h.DB, cipher, nil, slog.Default()), log: slog.Default()}
+	payload := `{
+		"name":"pay-influx","type":"influxdb","systemCode":"PAY","categoryId":` +
+		strconv.FormatInt(cat.ID, 10) +
+		`,"config":{"host":"127.0.0.1","port":8086,"database":"capacity","username":"cap","password":"secret","secure":false}}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/data-sources", strings.NewReader(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	hh.Create(c)
+
+	var body resp.Body
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not json: %v %s", err, w.Body.String())
+	}
+	if body.Code != resp.CodeOK {
+		t.Fatalf("create response: %+v", body)
+	}
+	var row persistence.DataSource
+	if err := h.DB.Where("name = ?", "pay-influx").First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(row.Config), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := cipher.Decrypt(cfg.Password)
+	if err != nil || plain != "secret" {
+		t.Fatalf("password not encrypted: %q err=%v", cfg.Password, err)
 	}
 }

@@ -32,6 +32,7 @@ type dsImportRow struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	TestSQL  string `json:"testSql,omitempty"`
+	Secure   string `json:"secure,omitempty"`
 
 	Scheme       string `json:"scheme,omitempty"`
 	PathTemplate string `json:"pathTemplate,omitempty"`
@@ -84,6 +85,7 @@ func parseDataSourceCSV(r io.Reader) ([]dsImportRow, error) {
 			Driver: get(rec, "driver"), Host: get(rec, "host"), Port: get(rec, "port"),
 			Database: get(rec, "database"), Service: get(rec, "service"),
 			Username: get(rec, "username"), Password: get(rec, "password"), TestSQL: get(rec, "testsql"),
+			Secure: get(rec, "secure"),
 			Scheme: get(rec, "scheme"), PathTemplate: get(rec, "pathtemplate"),
 			GlobTemplate: get(rec, "globtemplate"), Encoding: get(rec, "encoding"),
 			OS: get(rec, "os"), TempDir: get(rec, "tempdir"),
@@ -164,7 +166,7 @@ func (h *Handler) importDataSourceRow(r dsImportRow, operator string) string {
 	if name == "" || typ == "" || systemCode == "" || categoryName == "" {
 		return "name/type/systemCode/categoryName 不能为空"
 	}
-	if typ != "db" && typ != "log" && typ != "ssh" {
+	if typ != "db" && typ != "log" && typ != "ssh" && typ != "influxdb" {
 		return "不支持的数据源类型: " + typ
 	}
 	var cat persistence.DataSourceCategory
@@ -178,6 +180,7 @@ func (h *Handler) importDataSourceRow(r dsImportRow, operator string) string {
 		Type: typ, Driver: strings.TrimSpace(r.Driver), Host: strings.TrimSpace(r.Host),
 		Database: strings.TrimSpace(r.Database), Service: strings.TrimSpace(r.Service),
 		Username: strings.TrimSpace(r.Username), Password: r.Password, TestSQL: strings.TrimSpace(r.TestSQL),
+		Secure: false,
 		Scheme: strings.TrimSpace(r.Scheme), PathTemplate: strings.TrimSpace(r.PathTemplate),
 		GlobTemplate: strings.TrimSpace(r.GlobTemplate), Encoding: strings.TrimSpace(r.Encoding),
 		OS: strings.TrimSpace(r.OS), TempDir: strings.TrimSpace(r.TempDir),
@@ -188,6 +191,13 @@ func (h *Handler) importDataSourceRow(r dsImportRow, operator string) string {
 			return "端口不合法: " + v
 		}
 		cfg.Port = port
+	}
+	if v := strings.TrimSpace(r.Secure); v != "" {
+		secure, serr := strconv.ParseBool(v)
+		if serr != nil {
+			return "secure 仅支持 true/false: " + v
+		}
+		cfg.Secure = secure
 	}
 	raw, _ := json.Marshal(cfg)
 

@@ -24,9 +24,12 @@ func newTreeTestHandler(t *testing.T) (*Handler, *testutil.DBHarness) {
 	gin.SetMode(gin.TestMode)
 	h := testutil.NewDBHarness(t)
 	h.Migrate(&persistence.CapacityMetric{}, &persistence.BusinessSystem{},
+		&persistence.MetricCategory{},
 		&persistence.MetricValueDay{}, &persistence.MetricValueRT{},
+		&persistence.MetricStatModule{},
 		&persistence.SysUser{}, &persistence.SysRole{}, &persistence.SysUserRole{},
-		&persistence.SysRolePermission{}, &persistence.SysPermission{})
+		&persistence.SysRolePermission{}, &persistence.SysPermission{},
+		&persistence.SysDataScope{})
 	if err := h.DB.Create(&persistence.SysRole{Code: "platform_admin", Name: "平台管理员", Builtin: true, Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +99,80 @@ func callGet(t *testing.T, h *Handler, fn func(*gin.Context), params gin.Params,
 	return b
 }
 
+func callPut(t *testing.T, fn func(*gin.Context), params gin.Params, payload map[string]any) resp.Body {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body, _ := json.Marshal(payload)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/metrics", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = params
+	c.Set(middleware.CtxUsername, "admin")
+	fn(c)
+	var b resp.Body
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+		t.Fatalf("response not json: %v %s", err, w.Body.String())
+	}
+	return b
+}
+
 func fptr(v float64) *float64 { return &v }
+
+func TestUpdateMetricPersistsEditableFormFields(t *testing.T) {
+	h, db := newTreeTestHandler(t)
+	if err := db.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV.ORD", Name: "订单服务", SystemCode: "S1",
+		MetricKind: "group", Unit: "-", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	parentCode := "SRV.ORD"
+	m := persistence.CapacityMetric{
+		MetricCode: "SRV.ORD.COUNT", Name: "请求量", SystemCode: "S1",
+		MetricKind: "normal", ParentCode: &parentCode, StatModule: "count",
+		MetricType: "usage", Unit: "笔", StatMode: "sum",
+		JudgeDirection: "higher_worse", ThresholdMode: "absolute",
+		WarnLine: fptr(100), DangerLine: fptr(200), Baseline: fptr(50),
+		Remark: "旧备注", Status: "active",
+	}
+	if err := db.DB.Create(&m).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	b := callPut(t, h.Update, gin.Params{{Key: "code", Value: m.MetricCode}}, map[string]any{
+		"name": "请求量(修正)", "unit": "次", "statModule": "request_count",
+		"metricType": "absolute", "statMode": "max", "judgeDirection": "lower_worse",
+		"thresholdMode": "absolute", "warnLine": 200.0, "dangerLine": 100.0,
+		"baseline": 70.0, "remark": "",
+	})
+	if b.Code != resp.CodeOK {
+		t.Fatalf("update metric: %+v", b)
+	}
+
+	var got persistence.CapacityMetric
+	if err := db.DB.Where("metric_code = ?", m.MetricCode).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.StatModule != "request_count" {
+		t.Fatalf("stat_module = %q, want request_count", got.StatModule)
+	}
+	if got.MetricType != "absolute" {
+		t.Fatalf("metric_type = %q, want absolute", got.MetricType)
+	}
+	if got.Name != "请求量(修正)" || got.Unit != "次" || got.StatMode != "max" || got.JudgeDirection != "lower_worse" {
+		t.Fatalf("editable fields = name:%q unit:%q statMode:%q direction:%q", got.Name, got.Unit, got.StatMode, got.JudgeDirection)
+	}
+	if got.ThresholdMode != "absolute" || got.WarnLine == nil || *got.WarnLine != 200 ||
+		got.DangerLine == nil || *got.DangerLine != 100 {
+		t.Fatalf("threshold = %s %v/%v, want absolute 200/100", got.ThresholdMode, got.WarnLine, got.DangerLine)
+	}
+	if got.Baseline == nil || *got.Baseline != 70 {
+		t.Fatalf("baseline = %v, want 70", got.Baseline)
+	}
+	if got.Remark != "" {
+		t.Fatalf("remark = %q, want empty", got.Remark)
+	}
+}
 
 // TestCreateAggregateTreeValidation 汇总指标树形创建校验
 func TestCreateAggregateTreeValidation(t *testing.T) {
@@ -478,6 +554,114 @@ func TestModulesAggregationDay(t *testing.T) {
 	}
 }
 
+// TestModulesModuleAggModeOverride 模块汇总方式与普通指标日内方式解耦:
+// 叶子指标 latest 保留日值取最新的语义, count 模块仍可按显式配置做 sum。
+func TestModulesModuleAggModeOverride(t *testing.T) {
+	h, db := newTreeTestHandler(t)
+	_ = db.DB.Create(&persistence.BusinessSystem{SystemCode: "S1", Name: "系统一", Owner: "admin", Status: "normal"}).Error
+	_ = db.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV", Name: "服务请求", SystemCode: "S1", MetricKind: "aggregate",
+		Unit: "-", MainModule: "count", Status: "active",
+	}).Error
+	for _, g := range []struct{ code, name string }{
+		{"SRV.ORD", "订单服务请求"}, {"SRV.PAY", "支付服务请求"},
+	} {
+		pc := "SRV"
+		_ = db.DB.Create(&persistence.CapacityMetric{
+			MetricCode: g.code, Name: g.name, SystemCode: "S1", MetricKind: "group",
+			ParentCode: &pc, Unit: "-", Status: "active",
+		}).Error
+	}
+	for _, l := range []struct{ code, parent string }{
+		{"SRV.ORD.COUNT", "SRV.ORD"},
+		{"SRV.PAY.COUNT", "SRV.PAY"},
+	} {
+		pc := l.parent
+		if err := db.DB.Create(&persistence.CapacityMetric{
+			MetricCode: l.code, Name: "请求量", SystemCode: "S1", MetricKind: "normal",
+			ParentCode: &pc, StatModule: "count", Unit: "笔", StatMode: "latest", Status: "active",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedDayValues(t, db, "SRV.ORD.COUNT", []float64{3, 5})
+	seedDayValues(t, db, "SRV.PAY.COUNT", []float64{8, 17})
+
+	b := callPut(t, h.UpdateModule, gin.Params{
+		{Key: "code", Value: "SRV"},
+		{Key: "module", Value: "count"},
+	}, map[string]any{"aggMode": "sum"})
+	if b.Code != resp.CodeOK {
+		t.Fatalf("update module: %+v", b)
+	}
+
+	b = callGet(t, h, h.Modules, gin.Params{{Key: "code", Value: "SRV"}}, "granularity=day&days=30")
+	if b.Code != resp.CodeOK {
+		t.Fatalf("modules: %+v", b)
+	}
+	var data struct {
+		Modules []struct {
+			Module  string `json:"module"`
+			AggMode string `json:"aggMode"`
+			Series  []struct {
+				Value *float64 `json:"value"`
+			} `json:"series"`
+		} `json:"modules"`
+	}
+	if err := json.Unmarshal(dataJSON(t, b), &data); err != nil {
+		t.Fatalf("modules data: %v %s", err, b.Data)
+	}
+	if len(data.Modules) != 1 {
+		t.Fatalf("modules = %+v", data.Modules)
+	}
+	m := data.Modules[0]
+	if m.Module != "count" || m.AggMode != "sum" {
+		t.Fatalf("module = %+v, want count/sum", m)
+	}
+	if len(m.Series) != 2 {
+		t.Fatalf("series = %+v", m.Series)
+	}
+	if m.Series[0].Value == nil || *m.Series[0].Value != 11 {
+		t.Fatalf("series[0] = %v, want 11", m.Series[0].Value)
+	}
+	if m.Series[1].Value == nil || *m.Series[1].Value != 22 {
+		t.Fatalf("series[1] = %v, want 22", m.Series[1].Value)
+	}
+}
+
+// TestUpdateModuleValidation 模块汇总方式只接受跨子指标合并语义, 加权平均须有完整权重配置。
+func TestUpdateModuleValidation(t *testing.T) {
+	h, db := newTreeTestHandler(t)
+	_ = db.DB.Create(&persistence.BusinessSystem{SystemCode: "S1", Name: "系统一", Owner: "admin", Status: "normal"}).Error
+	_ = db.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV", Name: "服务请求", SystemCode: "S1", MetricKind: "aggregate", Unit: "-", Status: "active",
+	}).Error
+	pc := "SRV"
+	_ = db.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV.ORD", Name: "订单服务请求", SystemCode: "S1", MetricKind: "group",
+		ParentCode: &pc, Unit: "-", Status: "active",
+	}).Error
+	_ = db.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV.ORD.AVG", Name: "平均耗时", SystemCode: "S1", MetricKind: "normal",
+		ParentCode: &pc, StatModule: "avg_latency", Unit: "ms", StatMode: "avg", Status: "active",
+	}).Error
+
+	b := callPut(t, h.UpdateModule, gin.Params{
+		{Key: "code", Value: "SRV"},
+		{Key: "module", Value: "avg_latency"},
+	}, map[string]any{"aggMode": "weighted_avg"})
+	if b.Code != resp.CodeUnprocessable {
+		t.Fatalf("weighted_avg without weights should 422: %+v", b)
+	}
+	b = callPut(t, h.UpdateModule, gin.Params{
+		{Key: "code", Value: "SRV"},
+		{Key: "module", Value: "avg_latency"},
+	}, map[string]any{"aggMode": "latest"})
+	if b.Code != resp.CodeBadRequest {
+		t.Fatalf("latest module mode should 400: %+v", b)
+	}
+}
+
 // TestModulesAggregationRT 日内粒度按同一时间戳对齐聚合
 func TestModulesAggregationRT(t *testing.T) {
 	h, db := newTreeTestHandler(t)
@@ -485,7 +669,7 @@ func TestModulesAggregationRT(t *testing.T) {
 	_ = db.DB.Create(&persistence.CapacityMetric{
 		MetricCode: "SRV", Name: "服务请求", SystemCode: "S1", MetricKind: "aggregate", Unit: "-", Status: "active",
 	}).Error
-	base := time.Now().Truncate(time.Hour)
+	base := time.Now().Add(-2 * time.Hour).Truncate(time.Hour)
 	type leaf struct{ code, module, statMode string }
 	for _, l := range []leaf{
 		{"SRV.A.COUNT", "count", "sum"},

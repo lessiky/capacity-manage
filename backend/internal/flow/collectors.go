@@ -28,13 +28,13 @@ type CollectMeta struct {
 	RowsTotal      int
 	ParseFailCount int
 	RunLog         string
-	DsOK           []int64 // 读取成功的数据源 ID（分类采集按数据源粒度记录）
-	DsFailed       []int64 // 读取失败的数据源 ID
-	Glob           string  // 本次实际使用的文件匹配模式(流程 fileGlob > 数据源 globTemplate > pathTemplate)
+	DsOK           []int64  // 读取成功的数据源 ID（分类采集按数据源粒度记录）
+	DsFailed       []int64  // 读取失败的数据源 ID
+	Glob           string   // 本次实际使用的文件匹配模式(流程 fileGlob > 数据源 globTemplate > pathTemplate)
 	Files          []string // 实际读取到的文件路径（可追溯读了哪些日志文件）
 }
 
-// Collectors 三类采集方式分发（sql/logparse/python）
+// Collectors 采集方式分发（sql/influxql/logparse/python/script）
 type Collectors struct {
 	db     *gorm.DB
 	cred   *datasource.Registry
@@ -49,9 +49,15 @@ func NewCollectors(db *gorm.DB, cred *datasource.Registry, py *pyclient.Client, 
 }
 
 type sqlConfig struct {
-	SQLTemplate string   `json:"sqlTemplate"`
-	Aggregate   string   `json:"aggregate"` // single/sum/avg/max/min
-	ValueColumn string   `json:"valueColumn"`
+	SQLTemplate string `json:"sqlTemplate"`
+	Aggregate   string `json:"aggregate"` // single/sum/avg/max/min
+	ValueColumn string `json:"valueColumn"`
+}
+
+type influxConfig struct {
+	QueryTemplate string `json:"queryTemplate"`
+	Aggregate     string `json:"aggregate"` // single/sum/avg/max/min
+	ValueColumn   string `json:"valueColumn"`
 }
 
 type logConfig struct {
@@ -103,6 +109,8 @@ func (c *Collectors) Collect(ctx context.Context, fl *persistence.CollectFlow, d
 	switch fl.CollectType {
 	case "sql":
 		return c.collectSQL(ctx, fl, dsList[0], vars, base)
+	case "influxql":
+		return c.collectInfluxQL(ctx, fl, dsList[0], vars, base)
 	case "logparse":
 		return c.collectLog(ctx, fl, dsList, vars, base)
 	case "script":
@@ -224,6 +232,126 @@ func (c *Collectors) collectSQL(ctx context.Context, fl *persistence.CollectFlow
 		return out, meta, fmt.Errorf("SQL 无结果行")
 	}
 	return out, meta, nil
+}
+
+func (c *Collectors) collectInfluxQL(ctx context.Context, fl *persistence.CollectFlow, ds *persistence.DataSource,
+	vars map[string]string, base time.Time) ([]RawRow, *CollectMeta, error) {
+	var cfg influxConfig
+	if err := json.Unmarshal([]byte(fl.CollectConfig), &cfg); err != nil {
+		return nil, nil, fmt.Errorf("influxql 配置解析失败: %w", err)
+	}
+	if strings.TrimSpace(cfg.QueryTemplate) == "" {
+		return nil, nil, fmt.Errorf("queryTemplate 为空")
+	}
+	statement, err := c.renderSQL(ctx, fl, cfg.QueryTemplate, vars, base)
+	if err != nil {
+		return nil, nil, err
+	}
+	var dsCfg datasource.Config
+	if err := json.Unmarshal([]byte(ds.Config), &dsCfg); err != nil {
+		return nil, nil, fmt.Errorf("数据源配置解析失败: %w", err)
+	}
+	if err := c.cred.DecryptForCollect(&dsCfg); err != nil {
+		return nil, nil, err
+	}
+	if dsCfg.Type != "influxdb" {
+		return nil, nil, fmt.Errorf("InfluxQL 采集须绑定 influxdb 数据源, 当前为 %s", dsCfg.Type)
+	}
+	series, err := datasource.QueryInfluxDB(ctx, &dsCfg, statement)
+	if err != nil {
+		return nil, nil, fmt.Errorf("InfluxQL 执行失败: %w", err)
+	}
+	meta := &CollectMeta{}
+	values := make([]float64, 0, 8)
+	for _, one := range series {
+		valueIndex := influxValueColumn(one.Columns, cfg.ValueColumn)
+		for _, row := range one.Values {
+			meta.RowsTotal++
+			if valueIndex < 0 || valueIndex >= len(row) {
+				meta.ParseFailCount++
+				continue
+			}
+			raw := strings.TrimSpace(formatSQLValue(row[valueIndex]))
+			v, parseErr := strconv.ParseFloat(raw, 64)
+			if raw == "" || parseErr != nil {
+				meta.ParseFailCount++
+				continue
+			}
+			values = append(values, v)
+		}
+	}
+	if len(values) == 0 {
+		return nil, meta, fmt.Errorf("InfluxQL 无有效数值行(结果行 %d, 解析失败 %d)", meta.RowsTotal, meta.ParseFailCount)
+	}
+	value, err := aggregateInfluxValues(values, cfg.Aggregate)
+	if err != nil {
+		return nil, meta, err
+	}
+	meta.RunLog = fmt.Sprintf("InfluxQL series=%d rows=%d values=%d aggregate=%s",
+		len(series), meta.RowsTotal, len(values), defaultStr(cfg.Aggregate, "single"))
+	return []RawRow{{Raw: strconv.FormatFloat(value, 'f', -1, 64)}}, meta, nil
+}
+
+func influxValueColumn(columns []string, selected string) int {
+	if selected != "" {
+		for i, column := range columns {
+			if strings.EqualFold(column, selected) {
+				return i
+			}
+		}
+		return -1
+	}
+	for i, column := range columns {
+		if !strings.EqualFold(column, "time") {
+			return i
+		}
+	}
+	return -1
+}
+
+func aggregateInfluxValues(values []float64, mode string) (float64, error) {
+	if len(values) == 0 {
+		return 0, fmt.Errorf("无有效数值")
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "single"
+	}
+	if mode == "single" {
+		if len(values) != 1 {
+			return 0, fmt.Errorf("aggregate=single 要求仅返回一行, 实际 %d 行", len(values))
+		}
+		return values[0], nil
+	}
+	out := values[0]
+	switch mode {
+	case "sum":
+		out = 0
+		for _, value := range values {
+			out += value
+		}
+	case "avg":
+		out = 0
+		for _, value := range values {
+			out += value
+		}
+		out /= float64(len(values))
+	case "max":
+		for _, value := range values[1:] {
+			if value > out {
+				out = value
+			}
+		}
+	case "min":
+		for _, value := range values[1:] {
+			if value < out {
+				out = value
+			}
+		}
+	default:
+		return 0, fmt.Errorf("不支持的聚合方式: %s", mode)
+	}
+	return out, nil
 }
 
 func (c *Collectors) collectLog(ctx context.Context, fl *persistence.CollectFlow, dsList []*persistence.DataSource, vars map[string]string, base time.Time) ([]RawRow, *CollectMeta, error) {

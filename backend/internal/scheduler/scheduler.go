@@ -74,8 +74,8 @@ func (s *Scheduler) release() {
 	}
 }
 
-// SummaryFunc 日汇总实现（由 data 模块经 SetSummary 注入）
-type SummaryFunc func(ctx context.Context, db *gorm.DB, log *slog.Logger, params *system.Params, cal *tradingday.Calendar, bizDate time.Time)
+// SummaryFunc 自动日汇总实现（由 data 模块经 SetSummary 注入）
+type SummaryFunc func(ctx context.Context, db *gorm.DB, log *slog.Logger, params *system.Params, cal *tradingday.Calendar, bizDate, asOf time.Time)
 
 // SetSummary 注入日汇总实现
 func (s *Scheduler) SetSummary(f SummaryFunc) { s.summary = f }
@@ -281,10 +281,43 @@ func (s *Scheduler) registerBuiltinJobs(ctx context.Context) {
 	go s.dailySummaryLoop(ctx)
 	go s.dailyReportLoop(ctx)
 	go s.dailyForecastLoop(ctx)
+	go s.missingCheckLoop(ctx)
 	go s.reportSubscriptionLoop(ctx)
 	go s.archiveLoop(ctx)
 	_, _ = s.cron.AddFunc("0 */10 * * * *", func() { s.periodic(ctx) })
-	_, _ = s.cron.AddFunc("0 0 9 * * *", func() { s.missingCheck(ctx) })
+}
+
+func (s *Scheduler) missingCheckLoop(ctx context.Context) {
+	// 初始化 last 为进程启动时间：启动时已过配置时刻则当天不补跑。
+	last := time.Now()
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now()
+			if !s.missingCheckDue(last, now) {
+				continue
+			}
+			last = now
+			s.missingCheck(ctx)
+		}
+	}
+}
+
+func (s *Scheduler) missingCheckDue(last, now time.Time) bool {
+	return dailyJobDue(last, now, s.params.Get("missing_check_time", "09:00"))
+}
+
+func dailyJobDue(last, now time.Time, hhmm string) bool {
+	at, err := time.Parse("15:04", hhmm)
+	if err != nil {
+		return false
+	}
+	trigger := time.Date(now.Year(), now.Month(), now.Day(), at.Hour(), at.Minute(), 0, 0, now.Location())
+	return now.After(trigger) && last.Before(trigger)
 }
 
 // archiveLoop 超期分区压缩归档（默认每日 03:30, 参数 archive_time）
@@ -360,7 +393,7 @@ func (s *Scheduler) dailySummaryLoop(ctx context.Context) {
 				bizDate := trigger.AddDate(0, 0, -1)
 				s.log.Info("daily summary trigger", slog.String("bizDate", bizDate.Format("2006-01-02")))
 				if s.summary != nil {
-					go s.summary(ctx, s.db, s.log, s.params, s.cal, bizDate)
+					go s.summary(ctx, s.db, s.log, s.params, s.cal, bizDate, trigger)
 				}
 			}
 		}
@@ -512,9 +545,13 @@ func (s *Scheduler) Snapshot() map[string]any {
 }
 
 // missingCheck 缺数检测（FR-COL-34 基础版）:
-// 数据日期=上一交易日 的流程按对应市场前一交易日, 其余按前一自然日;
-// 期望业务日无日内数据点 → P2 缺数告警（同指标同日一条, OnMissing 内置去重）
+// trading_day 流程按最近一次已到点调度及各数据日期模式推导期望业务日, 其余按前一自然日;
+// 期望业务日无日内数据点 → P4 缺数告警（同指标同日一条, OnMissing 内置去重）
 func (s *Scheduler) missingCheck(ctx context.Context) {
+	s.missingCheckAt(ctx, time.Now())
+}
+
+func (s *Scheduler) missingCheckAt(ctx context.Context, now time.Time) {
 	if s.alerts == nil {
 		return
 	}
@@ -522,20 +559,30 @@ func (s *Scheduler) missingCheck(ctx context.Context) {
 	if err := s.db.Where("status = 'active' AND enabled = ?", true).Find(&flows).Error; err != nil {
 		return
 	}
-	now := time.Now()
 	for i := range flows {
 		fl := &flows[i]
 		// 新建流程(期望业务日之后才建档)无历史数据, 不判定缺数
 		var expect time.Time
 		var err error
-		if fl.BizDateMode == "calendar" {
+		if fl.ScheduleMode == "trading_day" || fl.BizDateMode == "calendar" {
 			market := fl.TradingMarket
 			if market == "" {
 				market = "SH"
 			}
-			expect, err = s.cal.PrevTradingDay(ctx, market, now)
+			window := fl.WindowTime
+			if window == "" {
+				window = "17:30:00"
+			}
+			var lastRun time.Time
+			lastRun, err = s.cal.PrevTriggerOnOrBefore(ctx, market, window, now)
 			if err != nil {
-				s.log.Warn("missing check: prev trading day failed",
+				s.log.Warn("missing check: prev trigger failed",
+					slog.String("flow", fl.FlowCode), slog.Any("err", err))
+				continue
+			}
+			expect, err = s.cal.BizDateForRun(ctx, market, fl.BizDateMode, lastRun)
+			if err != nil {
+				s.log.Warn("missing check: biz date failed",
 					slog.String("flow", fl.FlowCode), slog.Any("err", err))
 				continue
 			}
@@ -558,7 +605,11 @@ func (s *Scheduler) missingCheck(ctx context.Context) {
 		err = s.db.Model(&persistence.MetricValueRT{}).
 			Where("metric_code = ? AND ts >= ? AND ts < ?", fl.MetricCode, expect, expect.AddDate(0, 0, 1)).
 			Count(&n).Error
-		if err != nil || n > 0 {
+		if err != nil {
+			continue
+		}
+		if n > 0 {
+			s.alerts.OnMissingRecovered(ctx, &metric, expect)
 			continue
 		}
 		s.log.Warn("missing data detected",
@@ -582,9 +633,9 @@ func (t tradingDayTrigger) Next(after time.Time) time.Time {
 	}
 	window := t.window
 	if window == "" {
-		window = "17:30"
+		window = "17:30:00"
 	}
-	nxt, err := t.cal.NextTriggerAfter(context.Background(), market, window, after.Add(30*time.Second))
+	nxt, err := t.cal.NextTriggerAfter(context.Background(), market, window, after)
 	if err != nil {
 		return time.Now().Add(10 * time.Minute)
 	}

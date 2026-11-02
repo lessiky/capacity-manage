@@ -135,6 +135,18 @@ func (s *Service) OnMissing(ctx context.Context, metric *persistence.CapacityMet
 	s.notifyAsync("trigger", &rec)
 }
 
+// OnMissingRecovered 缺数补齐 → 关闭对应活动告警。
+func (s *Service) OnMissingRecovered(ctx context.Context, metric *persistence.CapacityMetric, bizDate time.Time) {
+	if metric == nil {
+		return
+	}
+	now := time.Now()
+	_ = s.db.WithContext(ctx).Model(&persistence.AlertRecord{}).
+		Where("metric_code = ? AND alert_type = 'missing' AND status IN ('active','processing') AND last_value_at >= ? AND last_value_at < ?",
+			metric.MetricCode, bizDate, bizDate.AddDate(0, 0, 1)).
+		Updates(map[string]any{"status": "recovered", "recovered_at": now}).Error
+}
+
 // OnDataSourceError 数据源异常告警（FR-COL-04 连续异常通知, P2）。
 // 同一数据源同时仅保留一条活动告警; 恢复前的后续失败仅刷新时间戳, 避免重复通知。
 func (s *Service) OnDataSourceError(ctx context.Context, ds *persistence.DataSource, msg string) {

@@ -2,7 +2,7 @@
   <div class="page-card" v-loading="loading">
     <div class="toolbar">
       <div class="toolbar-title">
-        <el-button link :icon="ArrowLeft" @click="$router.push('/metrics')" class="back" />
+        <el-button link :icon="ArrowLeft" @click="$router.push('/metrics?tab=tree')" class="back" />
         <span v-if="node">{{ node.name }}（{{ node.metricCode }}）</span>
         <el-tag v-if="node" size="small" :type="node.metricKind === 'aggregate' ? 'danger' : 'warning'" style="margin-left: 8px">
           {{ node.metricKind === 'aggregate' ? '汇总指标' : '子指标' }}
@@ -30,7 +30,7 @@
       </div>
       <div class="info-card" v-if="node?.metricKind === 'aggregate'">
         <div class="info-label">汇总口径</div>
-        <div class="info-sub" style="margin-top: 6px">主模块: {{ node.mainModule || '首个模块' }}(日值/阈值告警口径); 模块按统计方式合并, 配置权重指标时按加权均值计算</div>
+        <div class="info-sub" style="margin-top: 6px">主模块: {{ node.mainModule || '首个模块' }}(日值/阈值告警口径); 各统计模块按模块汇总方式计算, 与普通指标日内统计方式解耦</div>
       </div>
       <div class="info-card">
         <div class="info-label">时间范围</div>
@@ -49,6 +49,13 @@
             <span class="module-name">{{ m.name || m.module }}</span>
             <el-tag size="small" :type="aggTagType(m.aggMode)">{{ aggLabel(m.aggMode) }}</el-tag>
             <span class="module-unit" v-if="m.unit && m.unit !== '-'">{{ m.unit }}</span>
+            <el-button
+              v-if="node?.metricKind === 'aggregate' && (m.children?.length ?? 0) > 1"
+              link
+              type="primary"
+              size="small"
+              @click="openModuleEdit(m)"
+            >配置汇总方式</el-button>
           </div>
           <div class="module-latest">
             <span class="latest-value">{{ fmtNum(m.latest) }}</span>
@@ -74,6 +81,30 @@
         </div>
       </div>
     </div>
+
+    <el-dialog v-model="moduleEditVisible" title="配置统计模块汇总方式" width="440px">
+      <el-form label-width="110px" v-if="moduleEdit">
+        <el-form-item label="统计模块">
+          <span>{{ moduleEdit.name || moduleEdit.module }}（{{ moduleEdit.module }}）</span>
+        </el-form-item>
+        <el-form-item label="汇总方式">
+          <el-select v-model="moduleEdit.aggMode" style="width: 100%">
+            <el-option label="求和 (sum)" value="sum" />
+            <el-option label="取最大值 (max)" value="max" />
+            <el-option label="取最小值 (min)" value="min" />
+            <el-option label="平均值 (avg)" value="avg" />
+            <el-option label="加权平均 (weighted_avg)" value="weighted_avg" />
+          </el-select>
+        </el-form-item>
+        <div class="dialog-tip" v-if="moduleEdit.aggMode === 'weighted_avg'">
+          加权平均要求该模块内每个普通指标都配置同一父级下的权重指标。
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="moduleEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="moduleSaving" @click="saveModuleEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -94,6 +125,9 @@ const loading = ref(false)
 const node = ref<Record<string, any> | null>(null)
 const modulesData = ref<Record<string, any> | null>(null)
 const granularity = ref<'day' | 'rt'>('day')
+const moduleEditVisible = ref(false)
+const moduleSaving = ref(false)
+const moduleEdit = ref<Record<string, any> | null>(null)
 
 const chartRefs = new Map<string, HTMLElement>()
 const charts = new Map<string, echarts.ECharts>()
@@ -135,6 +169,29 @@ function aggTagType(mode: string): string {
 }
 function goMetric(metricCode: string) {
   router.push(`/metrics/${metricCode}/detail`)
+}
+
+function openModuleEdit(m: Record<string, any>) {
+  moduleEdit.value = { module: m.module, name: m.name, aggMode: m.aggMode }
+  moduleEditVisible.value = true
+}
+
+async function saveModuleEdit() {
+  if (!moduleEdit.value) return
+  moduleSaving.value = true
+  try {
+    await http.put(
+      `/api/v1/metrics/${encodeURIComponent(code)}/modules/${encodeURIComponent(moduleEdit.value.module)}`,
+      { aggMode: moduleEdit.value.aggMode },
+    )
+    ElMessage.success('汇总方式已更新')
+    moduleEditVisible.value = false
+    await loadModules()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    moduleSaving.value = false
+  }
 }
 
 async function loadNode() {
@@ -241,4 +298,5 @@ onBeforeUnmount(() => {
 .child-name { font-size: 12px; color: #606266; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-val { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .child-val em { font-style: normal; color: #909399; font-weight: 400; margin-left: 2px; }
+.dialog-tip { color: #909399; font-size: 12px; line-height: 1.5; padding-left: 110px; }
 </style>

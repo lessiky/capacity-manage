@@ -2,7 +2,7 @@
   <div class="page-card" v-loading="loading">
     <div class="toolbar">
       <div class="toolbar-title">
-        <el-button link :icon="ArrowLeft" @click="$router.push('/metrics')" class="back" />
+        <el-button link :icon="ArrowLeft" @click="$router.push('/metrics?tab=tree')" class="back" />
         <span v-if="metric">{{ metric.name }}（{{ metric.metricCode }}）</span>
       </div>
       <div class="toolbar-right">

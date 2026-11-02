@@ -15,7 +15,7 @@ import (
 	"capacity-manage/backend/internal/middleware"
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/resp"
-"capacity-manage/backend/internal/pkg/scope"
+	"capacity-manage/backend/internal/pkg/scope"
 	"capacity-manage/backend/internal/pyclient"
 
 	"github.com/gin-gonic/gin"
@@ -38,17 +38,17 @@ type flowReq struct {
 	FlowCode             string          `json:"flowCode" binding:"required,min=2,max=64"`
 	Name                 string          `json:"name" binding:"required"`
 	MetricCode           string          `json:"metricCode" binding:"required"`
-	DataSourceID         *int64          `json:"dataSourceId"`        // 数据源(与 DataSourceCategoryID 二选一)
+	DataSourceID         *int64          `json:"dataSourceId"`         // 数据源(与 DataSourceCategoryID 二选一)
 	DataSourceCategoryID *int64          `json:"dataSourceCategoryId"` // 数据源分类(logparse 专用)
-	CollectType          string          `json:"collectType" binding:"required,oneof=sql logparse python script"`
-	CollectConfig json.RawMessage `json:"collectConfig" binding:"required"`
-	CleanConfig   json.RawMessage `json:"cleanConfig"`
-	ScheduleMode  string          `json:"scheduleMode" binding:"omitempty,oneof=normal trading_day"`
-	CronExpr      string          `json:"cronExpr"`
-	TradingMarket string          `json:"tradingMarket"`
-	WindowTime    string          `json:"windowTime"`
-	BizDateMode   string          `json:"bizDateMode" binding:"omitempty,oneof=natural prev_day calendar"`
-	Remark        string          `json:"remark"`
+	CollectType          string          `json:"collectType" binding:"required,oneof=sql influxql logparse python script"`
+	CollectConfig        json.RawMessage `json:"collectConfig" binding:"required"`
+	CleanConfig          json.RawMessage `json:"cleanConfig"`
+	ScheduleMode         string          `json:"scheduleMode" binding:"omitempty,oneof=normal trading_day"`
+	CronExpr             string          `json:"cronExpr"`
+	TradingMarket        string          `json:"tradingMarket"`
+	WindowTime           string          `json:"windowTime"`
+	BizDateMode          string          `json:"bizDateMode" binding:"omitempty,oneof=natural prev_day calendar"`
+	Remark               string          `json:"remark"`
 }
 
 func (h *Handler) List(c *gin.Context) {
@@ -118,12 +118,12 @@ func (h *Handler) Create(c *gin.Context) {
 	fl := persistence.CollectFlow{
 		FlowCode: req.FlowCode, Name: req.Name, MetricCode: req.MetricCode,
 		DataSourceID: req.DataSourceID, DataSourceCategoryID: req.DataSourceCategoryID,
-		CollectType: req.CollectType,
+		CollectType:   req.CollectType,
 		CollectConfig: string(req.CollectConfig), CleanConfig: string(cleanCfg),
 		ScheduleMode: defaultStr(req.ScheduleMode, "normal"), CronExpr: req.CronExpr,
 		TradingMarket: defaultStr(req.TradingMarket, "SH"), WindowTime: req.WindowTime,
 		BizDateMode: defaultStr(req.BizDateMode, "natural"),
-		Version: 1, Status: "created", Enabled: false, Remark: req.Remark, CreatedBy: un,
+		Version:     1, Status: "created", Enabled: false, Remark: req.Remark, CreatedBy: un,
 	}
 	if err := h.db.Create(&fl).Error; err != nil {
 		resp.Fail(c, resp.NewErr(resp.CodeConflict, "创建失败(流程编码或指标已占用?)"))
@@ -152,7 +152,7 @@ func (h *Handler) validate(req *flowReq) error {
 	}
 	if req.ScheduleMode == "trading_day" {
 		if req.WindowTime == "" {
-			return resp.NewErr(resp.CodeBadRequest, "trading_day 调度模式须配置 windowTime(非交易时点)")
+			return resp.NewErr(resp.CodeBadRequest, "trading_day 调度模式须配置 windowTime(触发时间)")
 		}
 		if err := validateWindowTime(req.WindowTime); err != nil {
 			return err
@@ -174,6 +174,20 @@ func (h *Handler) validate(req *flowReq) error {
 		var sc scriptConfig
 		if err := json.Unmarshal(req.CollectConfig, &sc); err != nil || sc.ScriptID == 0 {
 			return resp.NewErr(resp.CodeBadRequest, "脚本采集须配置 scriptId")
+		}
+	}
+	if req.CollectType == "influxql" {
+		var ic influxConfig
+		if err := json.Unmarshal(req.CollectConfig, &ic); err != nil {
+			return resp.NewErr(resp.CodeBadRequest, "InfluxQL 采集配置解析失败")
+		}
+		if strings.TrimSpace(ic.QueryTemplate) == "" {
+			return resp.NewErr(resp.CodeBadRequest, "InfluxQL 采集须配置 queryTemplate")
+		}
+		switch defaultStr(ic.Aggregate, "single") {
+		case "single", "sum", "avg", "max", "min":
+		default:
+			return resp.NewErr(resp.CodeBadRequest, "InfluxQL 聚合方式仅支持 single/sum/avg/max/min")
 		}
 	}
 	return nil
@@ -445,6 +459,16 @@ func (h *Handler) validateDSBinding(collectType string, dataSourceID, categoryID
 				"脚本采集须绑定执行目标(数据源类型 ssh), 当前为 %s", ds.Type)
 		}
 	}
+	if collectType == "influxql" {
+		var ds persistence.DataSource
+		if err := h.db.First(&ds, *dataSourceID).Error; err != nil {
+			return resp.NewErr(resp.CodeBadRequest, "数据源不存在")
+		}
+		if ds.Type != "influxdb" {
+			return resp.NewErr(resp.CodeBadRequest,
+				"InfluxQL 采集须绑定 InfluxDB 数据源(类型 influxdb), 当前为 %s", ds.Type)
+		}
+	}
 	return nil
 }
 
@@ -537,8 +561,8 @@ func (h *Handler) CreateVersion(c *gin.Context) {
 	sum := sha256.Sum256([]byte(req.Content))
 	v := persistence.PythonScriptVersion{
 		ScriptID: id, Version: int(maxV) + 1, Content: req.Content,
-		Checksum: hex.EncodeToString(sum[:]),
-		Active:   maxV == 0, // 首版本自动生效
+		Checksum:    hex.EncodeToString(sum[:]),
+		Active:      maxV == 0, // 首版本自动生效
 		PublishedBy: un, PublishedAt: ptrTime(time.Now()), Remark: req.Remark,
 	}
 	if err := h.db.Create(&v).Error; err != nil {
@@ -568,26 +592,26 @@ func (h *Handler) ActivateVersion(c *gin.Context) {
 	resp.OK(c, nil)
 }
 
-// validateWindowTime 校验非交易时点: 单时刻 "HH:MM", 允许 15:00 至次日 09:00, 15 分钟一个间隔
+// validateWindowTime 校验交易日触发时间: "HH:MM" 或 "HH:MM:SS", 00:00:00-23:59:59 任意时刻
 func validateWindowTime(s string) error {
 	str := strings.TrimSpace(s)
 	if str == "" {
 		return resp.NewErr(resp.CodeBadRequest, "windowTime 不能为空")
 	}
 	parts := strings.Split(str, ":")
-	if len(parts) != 2 {
-		return resp.NewErr(resp.CodeBadRequest, "windowTime 格式应为 HH:MM 单时点, 不再支持时段")
+	if len(parts) != 2 && len(parts) != 3 {
+		return resp.NewErr(resp.CodeBadRequest, "windowTime 格式应为 HH:MM 或 HH:MM:SS")
 	}
 	hh, err1 := strconv.Atoi(parts[0])
 	mm, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+	ss := 0
+	var err3 error
+	if len(parts) == 3 {
+		ss, err3 = strconv.Atoi(parts[2])
+	}
+	if err1 != nil || err2 != nil || err3 != nil ||
+		hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59 {
 		return resp.NewErr(resp.CodeBadRequest, "windowTime 时刻无效: %s", str)
-	}
-	if mm%15 != 0 {
-		return resp.NewErr(resp.CodeBadRequest, "非交易时点须为 15 分钟间隔: %s", str)
-	}
-	if !(hh >= 15 || hh < 9 || (hh == 9 && mm == 0)) {
-		return resp.NewErr(resp.CodeBadRequest, "非交易时点须在 15:00 至次日 09:00 之间: %s", str)
 	}
 	return nil
 }

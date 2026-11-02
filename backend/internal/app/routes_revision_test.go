@@ -37,10 +37,11 @@ func TestRegisterRoutesIncludesAlertDashboard(t *testing.T) {
 	)
 
 	want := map[string]bool{
-		http.MethodGet + " /api/v1/alerts/dashboard":            false,
-		http.MethodGet + " /api/v1/alerts/dashboard-preference": false,
-		http.MethodPut + " /api/v1/alerts/dashboard-preference": false,
-		http.MethodGet + " /api/v1/alerts/dashboard-options":    false,
+		http.MethodGet + " /api/v1/alerts/dashboard":              false,
+		http.MethodGet + " /api/v1/alerts/dashboard-preference":   false,
+		http.MethodPut + " /api/v1/alerts/dashboard-preference":   false,
+		http.MethodGet + " /api/v1/alerts/dashboard-options":      false,
+		http.MethodPut + " /api/v1/metrics/:code/modules/:module": false,
 	}
 	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path
@@ -68,6 +69,62 @@ func TestRegisterRoutesIncludesPublicBrandingAndIconManagement(t *testing.T) {
 		http.MethodGet + " /api/v1/branding":                      false,
 		http.MethodPost + " /api/v1/admin/params/platform-icon":   false,
 		http.MethodDelete + " /api/v1/admin/params/platform-icon": false,
+	}
+	for _, route := range engine.Routes() {
+		key := route.Method + " " + route.Path
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for route, found := range want {
+		if !found {
+			t.Fatalf("%s is not registered", route)
+		}
+	}
+}
+
+func TestRegisterRoutesIncludesMetricCategoryManagement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	v1 := engine.Group("/api/v1")
+	registerRoutes(
+		nil, v1, nil, "test-secret", time.Minute, &middleware.AuthZ{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	want := map[string]bool{
+		http.MethodGet + " /api/v1/metric-categories":        false,
+		http.MethodPost + " /api/v1/metric-categories":       false,
+		http.MethodPut + " /api/v1/metric-categories/:id":    false,
+		http.MethodDelete + " /api/v1/metric-categories/:id": false,
+	}
+	for _, route := range engine.Routes() {
+		key := route.Method + " " + route.Path
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for route, found := range want {
+		if !found {
+			t.Fatalf("%s is not registered", route)
+		}
+	}
+}
+
+func TestRegisterRoutesIncludesFlowVariables(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	v1 := engine.Group("/api/v1")
+	registerRoutes(
+		nil, v1, nil, "test-secret", time.Minute, &middleware.AuthZ{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	want := map[string]bool{
+		http.MethodGet + " /api/v1/flow-variables":        false,
+		http.MethodPost + " /api/v1/flow-variables":       false,
+		http.MethodPut + " /api/v1/flow-variables/:id":    false,
+		http.MethodDelete + " /api/v1/flow-variables/:id": false,
 	}
 	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path

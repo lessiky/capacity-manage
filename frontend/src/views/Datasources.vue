@@ -10,6 +10,7 @@
       <el-select v-model="filterType" clearable placeholder="类型" style="width: 110px" @change="reload">
         <el-option label="数据库" value="db" />
         <el-option label="日志" value="log" />
+        <el-option label="InfluxDB 1.x" value="influxdb" />
         <el-option label="执行目标" value="ssh" />
       </el-select>
       <el-button type="primary" :icon="Search" @click="reload">查询</el-button>
@@ -87,6 +88,7 @@
           <el-radio-group v-model="form.type" :disabled="!!editingId">
             <el-radio value="db">数据库</el-radio>
             <el-radio value="log">日志文件</el-radio>
+            <el-radio value="influxdb">InfluxDB 1.x</el-radio>
             <el-radio value="ssh">执行目标</el-radio>
           </el-radio-group>
         </el-form-item>
@@ -139,7 +141,7 @@
           </el-form-item>
         </template>
 
-        <template v-else>
+        <template v-else-if="form.type === 'ssh'">
           <el-form-item label="目标系统">
             <el-radio-group v-model="form.ssh.os" @change="onSshOsChange">
               <el-radio value="linux">Linux</el-radio>
@@ -156,6 +158,24 @@
           <el-form-item label="临时目录">
             <el-input v-model="form.ssh.tempDir" :placeholder="form.ssh.os === 'windows' ? 'C:/Windows/Temp' : '/tmp'" />
             <div class="field-hint">脚本与参数下发到此目录下的 capcollect-&lt;任务号&gt; 子目录, 执行结束后整个目录删除; Windows 目标建议填 C:/Windows/Temp</div>
+          </el-form-item>
+        </template>
+
+        <template v-else>
+          <el-form-item label="主机" required><el-input v-model="form.influx.host" /></el-form-item>
+          <el-form-item label="端口" required>
+            <el-input-number v-model="form.influx.port" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="数据库" required><el-input v-model="form.influx.database" placeholder="InfluxDB database" /></el-form-item>
+          <el-form-item label="账号">
+            <el-input v-model="form.influx.username" placeholder="可选: 留空表示未开启认证" />
+          </el-form-item>
+          <el-form-item label="密码" :required="!!form.influx.username">
+            <el-input v-model="form.influx.password" type="password" show-password :placeholder="editingId ? '留空 = 不修改' : ''" />
+          </el-form-item>
+          <el-form-item label="HTTPS">
+            <el-switch v-model="form.influx.secure" />
+            <div class="field-hint">开启后使用 https:// 访问 InfluxDB HTTP API</div>
           </el-form-item>
         </template>
       </el-form>
@@ -252,9 +272,9 @@ import { Search, Refresh, Plus, Collection, Upload, Download } from '@element-pl
 import { http } from '@/api/http'
 import { fmtTs } from '@/utils/format'
 
-// 数据源类型展示: db/log 为取数数据源, ssh 为远程脚本执行目标
-const TYPE_LABELS: Record<string, string> = { db: '数据库', log: '日志', ssh: '执行目标' }
-const TYPE_TAGS: Record<string, string> = { db: '', log: 'warning', ssh: 'success' }
+// 数据源类型展示: db/log/influxdb 为取数数据源, ssh 为远程脚本执行目标
+const TYPE_LABELS: Record<string, string> = { db: '数据库', log: '日志', influxdb: 'InfluxDB', ssh: '执行目标' }
+const TYPE_TAGS: Record<string, string> = { db: '', log: 'warning', influxdb: 'primary', ssh: 'success' }
 
 interface DsRow {
   id: number
@@ -337,6 +357,10 @@ function onFilterSystemChange() {
 function summary(config: string) {
   try {
     const c = JSON.parse(config)
+    if (c.type === 'influxdb') {
+      const scheme = c.secure ? 'https' : 'http'
+      return `${scheme}://${c.host ?? ''}:${c.port || 8086}/${c.database ?? ''}`.trim()
+    }
     if (c.driver) return `${c.driver} ${c.host ?? ''}:${c.port ?? ''} ${c.service || c.database || ''}`.trim()
     if (c.os) return `${c.os} ssh ${c.host ? c.host + ':' + (c.port || 22) + ' ' : ''}${c.tempDir || ''}`.trim()
     // 采集实际读取的是 globTemplate(其次 pathTemplate), 列表优先展示真正生效的匹配模式
@@ -393,7 +417,7 @@ async function doDelete(row: DsRow) {
 }
 
 // ---------- 批量导入 ----------
-const IMPORT_HEADER = 'name,type,systemCode,categoryName,driver,host,port,database,service,username,password,scheme,pathTemplate,globTemplate,os,tempDir'
+const IMPORT_HEADER = 'name,type,systemCode,categoryName,driver,host,port,database,service,username,password,scheme,pathTemplate,globTemplate,os,tempDir,secure'
 interface ImportResult {
   total: number
   success: number
@@ -418,9 +442,10 @@ function importCsvField(v: string) {
 function downloadTemplate() {
   const lines = [
     IMPORT_HEADER.split(','),
-    ['pay-db-01', 'db', 'PAY', '核心库', 'oracle', '10.0.0.1', '1521', '', 'ORCL', 'cap_read', '密码', '', '', '', '', ''],
-    ['pay-log-01', 'log', 'PAY', '日志目录', '', '', '', '', '', '', '', 'local', '/data/cap', 'cap_*.log', '', ''],
-    ['pay-ssh-01', 'ssh', 'PAY', '核心库', '', '10.0.0.5', '22', '', '', 'cap', '密码', '', '', '', 'linux', '/data/tmp'],
+    ['pay-db-01', 'db', 'PAY', '核心库', 'oracle', '10.0.0.1', '1521', '', 'ORCL', 'cap_read', '密码', '', '', '', '', '', ''],
+    ['pay-log-01', 'log', 'PAY', '日志目录', '', '', '', '', '', '', '', 'local', '/data/cap', 'cap_*.log', '', '', ''],
+    ['pay-influx-01', 'influxdb', 'PAY', '指标库', '', '10.0.0.8', '8086', 'capacity', '', 'cap', '密码', '', '', '', '', '', 'false'],
+    ['pay-ssh-01', 'ssh', 'PAY', '核心库', '', '10.0.0.5', '22', '', '', 'cap', '密码', '', '', '', 'linux', '/data/tmp', ''],
   ].map((row) => row.map(importCsvField).join(','))
   const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -460,6 +485,7 @@ function blankForm() {
     name: '', type: 'db',
     db: { driver: 'oracle', host: '', port: 1521, service: '', database: '', username: '', password: '' },
     log: { scheme: 'local', host: '', port: 22, username: '', password: '', pathTemplate: '', globTemplate: '', encoding: 'utf-8' },
+    influx: { host: '', port: 8086, database: '', username: '', password: '', secure: false },
     ssh: { os: 'linux', host: '', port: 22, username: '', password: '', tempDir: '/tmp' },
   }
 }
@@ -491,11 +517,16 @@ function openEdit(row: DsRow) {
         username: c.username || '', password: '', pathTemplate: c.pathTemplate || '',
         globTemplate: c.globTemplate || '', encoding: c.encoding || 'utf-8',
       })
-    } else {
+    } else if (row.type === 'ssh') {
       const os = c.os || 'linux'
       Object.assign(form.value.ssh, {
         os, host: c.host || '', port: c.port || 22, username: c.username || '', password: '',
         tempDir: c.tempDir || (os === 'windows' ? 'C:/Windows/Temp' : '/tmp'),
+      })
+    } else {
+      Object.assign(form.value.influx, {
+        host: c.host || '', port: c.port || 8086, database: c.database || '',
+        username: c.username || '', password: '', secure: !!c.secure,
       })
     }
   } catch { /* config 解析失败保持空白 */ }
@@ -505,9 +536,12 @@ async function saveForm() {
   if (!form.value.systemCode) { ElMessage.warning('请选择所属系统'); return }
   if (!form.value.categoryId) { ElMessage.warning('请选择所属分类'); return }
   if (!form.value.name.trim()) { ElMessage.warning('请输入名称'); return }
-    if (form.value.type === 'ssh' && (!form.value.ssh.host.trim() || !form.value.ssh.username.trim())) {
-      ElMessage.warning('执行目标须填写主机与账号'); return
-    }
+  if (form.value.type === 'ssh' && (!form.value.ssh.host.trim() || !form.value.ssh.username.trim())) {
+    ElMessage.warning('执行目标须填写主机与账号'); return
+  }
+  if (form.value.type === 'influxdb' && (!form.value.influx.host.trim() || !form.value.influx.database.trim())) {
+    ElMessage.warning('InfluxDB 须填写主机与数据库'); return
+  }
   saving.value = true
   try {
     let config: Record<string, unknown>
@@ -515,14 +549,18 @@ async function saveForm() {
       const { password, ...rest } = form.value.db
       config = { ...rest }
       if (password) config.password = password
-      } else if (form.value.type === 'log') {
+    } else if (form.value.type === 'log') {
       const { password, ...rest } = form.value.log
       config = { ...rest }
       if (password) config.password = password
-      } else {
-        const { password, ...rest } = form.value.ssh
-        config = { ...rest }
-        if (password) config.password = password
+    } else if (form.value.type === 'ssh') {
+      const { password, ...rest } = form.value.ssh
+      config = { ...rest }
+      if (password) config.password = password
+    } else {
+      const { password, ...rest } = form.value.influx
+      config = { ...rest }
+      if (password) config.password = password
     }
     const body = {
       name: form.value.name, type: form.value.type, config,

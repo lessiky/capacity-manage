@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"capacity-manage/backend/internal/metric"
 	"capacity-manage/backend/internal/middleware"
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/resp"
@@ -396,6 +397,7 @@ type metricImportRow struct {
 	MetricCode     string   `json:"metricCode"`
 	Name           string   `json:"name"`
 	SystemCode     string   `json:"systemCode"`
+	Category       string   `json:"category"`
 	Unit           string   `json:"unit"`
 	JudgeDirection string   `json:"judgeDirection"`
 	WarnLine       *float64 `json:"warnLine"`
@@ -403,7 +405,7 @@ type metricImportRow struct {
 }
 
 // ImportMetrics 批量导入指标（CSV 上传或 JSON 数组）。CSV 表头:
-// metricCode,name,systemCode,unit,judgeDirection,warnLine,dangerLine
+// metricCode,name,systemCode,category,unit,judgeDirection,warnLine,dangerLine
 func (h *Handler) ImportMetrics(c *gin.Context) {
 	var rows []metricImportRow
 	filename := "inline"
@@ -440,7 +442,7 @@ func (h *Handler) ImportMetrics(c *gin.Context) {
 	}
 	failures := make([]failure, 0)
 	for i, r := range rows {
-		reason := h.upsertImportedMetric(r.MetricCode, r.Name, r.SystemCode, r.Unit, r.JudgeDirection, r.WarnLine, r.DangerLine)
+		reason := h.upsertImportedMetric(r.MetricCode, r.Name, r.SystemCode, r.Category, r.Unit, r.JudgeDirection, r.WarnLine, r.DangerLine)
 		if reason != "" {
 			failures = append(failures, failure{Row: i + 1, Reason: reason})
 			continue
@@ -471,7 +473,7 @@ func (h *Handler) ImportMetrics(c *gin.Context) {
 	})
 }
 
-func (h *Handler) upsertImportedMetric(code, name, system, unit, direction string, warn, danger *float64) string {
+func (h *Handler) upsertImportedMetric(code, name, system, category, unit, direction string, warn, danger *float64) string {
 	if strings.TrimSpace(code) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(system) == "" {
 		return "指标编码/名称/系统编码不能为空"
 	}
@@ -488,11 +490,15 @@ func (h *Handler) upsertImportedMetric(code, name, system, unit, direction strin
 	if n == 0 {
 		return "业务系统不存在: " + system
 	}
+	categoryName, err := metric.ResolveMetricCategory(h.db, system, category)
+	if err != nil {
+		return err.Error()
+	}
 	var existing persistence.CapacityMetric
-	err := h.db.Where("metric_code = ?", code).First(&existing).Error
+	err = h.db.Where("metric_code = ?", code).First(&existing).Error
 	if err != nil {
 		row := persistence.CapacityMetric{
-			MetricCode: code, Name: name, SystemCode: system, Unit: unit,
+			MetricCode: code, Name: name, SystemCode: system, Category: categoryName, Unit: unit,
 			JudgeDirection: direction, WarnLine: warn, DangerLine: danger,
 			Status: "active", MetricKind: "single",
 		}
@@ -501,8 +507,12 @@ func (h *Handler) upsertImportedMetric(code, name, system, unit, direction strin
 		}
 		return ""
 	}
+	if existing.SystemCode != system {
+		return "指标已存在且归属系统不一致: " + code
+	}
 	updates := map[string]any{
-		"name": name, "unit": unit, "judge_direction": direction, "updated_at": time.Now(),
+		"name": name, "category": categoryName, "unit": unit,
+		"judge_direction": direction, "updated_at": time.Now(),
 	}
 	if warn != nil {
 		updates["warn_line"] = *warn
@@ -547,7 +557,8 @@ func parseMetricCSV(r io.Reader) ([]metricImportRow, error) {
 	for _, rec := range records[1:] {
 		item := metricImportRow{
 			MetricCode: get(rec, "metriccode"), Name: get(rec, "name"),
-			SystemCode: get(rec, "systemcode"), Unit: get(rec, "unit"),
+			SystemCode: get(rec, "systemcode"), Category: get(rec, "category"),
+			Unit:           get(rec, "unit"),
 			JudgeDirection: get(rec, "judgedirection"),
 		}
 		if v := get(rec, "warnline"); v != "" {

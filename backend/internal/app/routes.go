@@ -180,6 +180,14 @@ func registerRoutes(
 		mt.GET("/:code/forecast", az.RequirePerm("metric:view"), fcH.MetricForecast)
 		mt.GET("/tree", az.RequirePerm("metric:view"), metH.Tree)
 		mt.GET("/:code/modules", az.RequirePerm("metric:view"), metH.Modules)
+		mt.PUT("/:code/modules/:module", az.RequirePerm("metric:manage"), metH.UpdateModule)
+	}
+	mcat := v1.Group("/metric-categories")
+	{
+		mcat.GET("", az.RequirePerm("metric:view"), metH.ListCategories)
+		mcat.POST("", az.RequirePerm("metric:manage"), metH.CreateCategory)
+		mcat.PUT("/:id", az.RequirePerm("metric:manage"), metH.UpdateCategory)
+		mcat.DELETE("/:id", az.RequirePerm("metric:manage"), metH.DeleteCategory)
 	}
 
 	// 统计预测与风险清单（FR-PRE-01~04）: 数据权限在 handler 内按可见系统过滤
@@ -251,6 +259,14 @@ func registerRoutes(
 		fl.POST("/:id/archive", az.RequirePerm("flow:manage"), flowH.Archive)
 		fl.POST("/:id/trigger", az.RequirePerm("task:manage"), flowH.Trigger)
 		fl.DELETE("/:id", az.RequirePerm("flow:manage"), flowH.Delete)
+	}
+
+	fv := v1.Group("/flow-variables")
+	{
+		fv.GET("", az.RequirePerm("flow:view"), flowH.ListVariables)
+		fv.POST("", az.RequirePerm("flow:manage"), flowH.CreateVariable)
+		fv.PUT("/:id", az.RequirePerm("flow:manage"), flowH.UpdateVariable)
+		fv.DELETE("/:id", az.RequirePerm("flow:manage"), flowH.DeleteVariable)
 	}
 
 	sc := v1.Group("/scripts")

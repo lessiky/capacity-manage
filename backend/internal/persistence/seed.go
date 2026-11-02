@@ -10,9 +10,11 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// Seed 初始化: 管理员/内置角色/权限点/交易日日历(2026-2027)
+// Seed 初始化: 管理员/内置角色/权限点/交易日日历(2026-2027)。
+// 演示指标数据不在默认启动路径播种。
 // 幂等: 已存在则跳过。
 func Seed(ctx context.Context, db *gorm.DB) error {
 	// 顺序敏感: 先建内置角色与权限, 再建 admin 并绑定角色(INSERT...SELECT 依赖角色行)
@@ -23,9 +25,6 @@ func Seed(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 	if err := seedTradingCalendar(ctx, db); err != nil {
-		return err
-	}
-	if err := seedDemoAggregate(ctx, db); err != nil {
 		return err
 	}
 	return nil
@@ -147,27 +146,38 @@ func seedRolesAndPerms(ctx context.Context, db *gorm.DB) error {
 	}()
 	roleID := map[string]int64{}
 	for _, r := range builtinRoles {
-		if err := tx.Create(&r).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "code"}},
+			DoNothing: true,
+		}).Create(&r).Error; err != nil {
 			return err
 		}
 		var got SysRole
-		tx.Where("code = ?", r.Code).First(&got)
+		if err := tx.Where("code = ?", r.Code).First(&got).Error; err != nil {
+			return err
+		}
 		roleID[r.Code] = got.ID
 	}
 	permID := map[string]int64{}
 	for _, p := range builtinPerms {
 		pg := SysPermission{Code: p.Code, Name: p.Name, Type: p.Type, Path: p.Path}
-		if err := tx.Create(&pg).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "code"}},
+			DoNothing: true,
+		}).Create(&pg).Error; err != nil {
 			return err
 		}
 		var got SysPermission
-		tx.Where("code = ?", p.Code).First(&got)
+		if err := tx.Where("code = ?", p.Code).First(&got).Error; err != nil {
+			return err
+		}
 		permID[p.Code] = got.ID
 	}
 	for roleCode, codes := range rolePerms {
 		uid := roleID[roleCode]
 		for _, c := range codes {
-			if err := tx.Create(&SysRolePermission{RoleID: uid, PermissionID: permID[c]}).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&SysRolePermission{RoleID: uid, PermissionID: permID[c]}).Error; err != nil {
 				return err
 			}
 		}

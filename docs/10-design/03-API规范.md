@@ -95,14 +95,14 @@
 | 方法 | 路径 | 说明 | 权限 |
 | --- | --- | --- | --- |
 | GET | /data-sources | 列表（类型/状态/系统/分类筛选；**密码字段恒脱敏**；返回含 systemName/categoryName） | datasource:view |
-| POST | /data-sources | 创建（db: driver/host/port/dbname/username/password；log: scheme/path/encoding/glob + sftp 凭据；**systemCode + categoryId 必填**, 分类须为该系统下） | datasource:manage |
+| POST | /data-sources | 创建（db: driver/host/port/dbname/username/password；log: scheme/path/encoding/glob + sftp 凭据；influxdb: host/port/database/username/password/secure，仅支持 1.x；**systemCode + categoryId 必填**, 分类须为该系统下） | datasource:manage |
 | GET/PUT | /data-sources/{id} | 详情（脱敏, 含 systemName/categoryName）/编辑（password 留空=不修改；**systemCode + categoryId 必填**） | datasource:manage |
 > log 数据源两个路径字段: `pathTemplate`（目录/单文件, 供连接测试与健康巡检列目录）与 `globTemplate`（采集实际读取的文件匹配模式, 优先级高于 `pathTemplate`, 支持 `${biz_date:YYYYMMDD}` 等变量）。编辑（PUT）配置按"字段缺省=沿用原值"合并: 请求体不含 `globTemplate` 则保留旧值（避免旧客户端/表单整体覆盖抹掉采集入口）, 显式传空串才清空。
 | GET | /data-source-categories | 分类列表（`systemCode` 筛选） | datasource:view |
 | POST | /data-source-categories | 新建分类（`{systemCode,name,remark?,sort?}`；**systemCode 必填**, 系统内名称唯一, 40900 重名） | datasource:manage |
 | PUT | /data-source-categories/{id} | 编辑分类（`{name,remark?,sort?}`；系统归属不可变更） | datasource:manage |
 | DELETE | /data-source-categories/{id} | 删除分类（仍被数据源归属时 40900） | datasource:manage |
-| POST | /data-sources/{id}/test | 测试连接（DB 执行 test_sql；日志列目录+试读一行）→ `{ok,message,rows?}` | datasource:manage |
+| POST | /data-sources/{id}/test | 测试连接（DB 执行 test_sql；日志列目录+试读一行；InfluxDB 1.x 先 GET /ping 再执行 SHOW MEASUREMENTS）→ `{ok,message,rows?}` | datasource:manage |
 | POST | /data-sources/{id}/disable | 停用 | datasource:manage |
 
 ## 7. 指标与阈值（metrics）
@@ -113,21 +113,22 @@
 | POST | /metrics | 创建（含三级阈值；`metricKind` normal/group/aggregate + `parentCode`/`statModule` 支持汇总指标树；汇总指标可配 `mainModule`(主统计模块)与可选阈值；普通指标可配 `weightMetricCode`(权重指标, 加权均值; 须为同一父级下的同级普通指标)；42200 校验合理性与树形规则） | metric:manage |
 | GET/PUT | /metrics/{code} | 详情（含阈值视图数据）/编辑（PUT 可更新 `mainModule`/`weightMetricCode`，传空串清除权重） | metric:manage |
 | GET | /metrics/tree | 指标树（汇总指标→子指标分组→统计模块；独立指标平铺为顶层；`systemCode`/`keyword` 筛选）→ {roots, count} | metric:view |
-| GET | /metrics/{code}/modules | 汇总指标/子指标统计模块视图 `{granularity:day\|rt, days:1~400 或 from/to}` → 各模块 最新值/序列/区间统计/子指标；汇总指标按 stat_module 跨子指标聚合：单叶子 self，配置权重指标 `weighted_avg`（加权均值 sum(值×权重)/sum(权重)，权重按同一业务日/时间戳对齐），否则取首个叶子 `statMode`（sum/max/avg/min，日内按同一时间戳对齐） | metric:view |
+| GET | /metrics/{code}/modules | 汇总指标/子指标统计模块视图 `{granularity:day\|rt, days:1~400 或 from/to}` → 各模块 最新值/序列/区间统计/子指标；汇总指标按 `stat_module` 跨子指标聚合：单叶子 self；配置 `metric_stat_module.agg_mode` 时优先使用模块配置；未配置时兼容旧口径（权重指标 `weighted_avg`，否则取首个叶子 `statMode`）。权重按同一业务日/时间戳对齐 | metric:view |
+| PUT | /metrics/{code}/modules/{module} | 配置统计模块汇总方式 `{aggMode:sum\|max\|min\|avg\|weighted_avg}`；`weighted_avg` 要求模块内全部普通指标已配置权重指标 | metric:manage |
 | POST | /metrics/{code}/disable | 停用（已产生告警需 `confirm=true` 二次确认） | metric:manage |
 | POST | /metrics/{code}/enable | 重新启用（联动恢复被停用联动的采集流程） | metric:manage |
 | DELETE | /metrics/{code} | 删除（仅停用且无关联流程/历史数据/告警/阈值历史；否则提示保持停用） | metric:manage |
 | PUT | /metrics/{code}/threshold | 阈值调整（即时生效，写 threshold_history，`reason` 选填） | metric:manage |
 | GET | /metrics/{code}/threshold-history | 调整历史 | metric:view |
 
-> 汇总指标（aggregate）无采集流：日汇总（定时/`POST /data/summary/run`）时按 `mainModule`（空=首个模块）跨子指标聚合生成 `metric_value_day` 行（`source=aggregate`，含水位/级别），并按其阈值联动阈值告警（生成/合并/升级/恢复，与常规指标同一告警状态机）。聚合口径与 `/modules` 视图一致（`metricagg` 包）。
+> 汇总指标（aggregate）无采集流：日汇总（定时/`POST /data/summary/run`）时按 `mainModule`（空=首个模块）读取该模块的 `metric_stat_module.agg_mode`，跨子指标聚合生成 `metric_value_day` 行（`source=aggregate`，含水位/级别），并按其阈值联动阈值告警（生成/合并/升级/恢复，与常规指标同一告警状态机）。普通指标 `statMode` 只负责日内取值，模块 `agg_mode` 负责跨子指标汇总；聚合口径与 `/modules` 视图一致（`metricagg` 包）。
 
 ## 8. 采集流程（flows）
 
 | 方法 | 路径 | 说明 | 权限 |
 | --- | --- | --- | --- |
 | GET | /flows | 列表（指标/数据源/数据源分类/状态/启用筛选） | flow:view |
-| POST | /flows | 创建（created 状态；数据源/数据源分类二选一；含 collect_config/clean_config/调度配置） | flow:manage |
+| POST | /flows | 创建（created 状态；数据源/数据源分类二选一；collectType=sql/influxql/logparse/python/script；含 collect_config/clean_config/调度配置） | flow:manage |
 | GET/PUT | /flows/{id} | 详情/编辑（可重绑数据源/分类；编辑使 version+1，需重新预览生效） | flow:manage |
 | POST | /flows/{id}/preview | 预览试跑（不落库，返回数据日期 bizDate + 原始数据 + 清洗后数据 + 校验提示） | flow:manage |
 | POST | /flows/{id}/activate | 生效（created/编辑后 → active） | flow:manage |
@@ -137,11 +138,24 @@
 | GET | /flows/export-template | 批量导入模板下载（P1） | flow:view |
 | POST | /flows/import | 批量导入（P1） | flow:manage |
 
-> 调度与数据日期: trading_day 模式须配 `windowTime`（非交易时点, 单 "HH:MM", 15:00 至次日 09:00, 15 分钟间隔; 不分市场, 按 SH 日历）; 采集配置含数据日期 `bizDateMode`: `natural`=当日（默认）/ `prev_day`=上日（前一自然日）/ `calendar`=上一交易日（决定 `${biz_date}` 与落地业务日）; 编辑这些配置均使 version+1 并回到 created 状态。
+> 调度与数据日期: trading_day 模式须配 `windowTime`（触发时间, 单 "HH:MM" 或 "HH:MM:SS", 支持 00:00:00-23:59:59 任意时刻并精确到秒; 不分市场, 按 SH 日历）; 采集配置含数据日期 `bizDateMode`: `natural`=当日（默认）/ `prev_day`=上日（前一自然日）/ `calendar`=上一交易日（决定 `${biz_date}` 与落地业务日）; 编辑这些配置均使 version+1 并回到 created 状态。
 >
 > 绑定规则: 流程的 `dataSourceId`（数据源）与 `dataSourceCategoryId`（数据源分类）须且仅可选一项。数据源分类仅 logparse 采集可用; 分类下须至少有一个未停用的日志数据源。分类采集读取该分类下全部未停用日志数据源, 共用同一采集/清洗配置: 正则/分隔符/JSON 模式原始行合并后按指标 statMode 聚合; 段落聚合（section）模式则每台数据源先按同一段落逻辑聚合, 再跨数据源合并（次数求和 / 最快取最小 / 最慢取最大 / 平均按调用次数加权 = Σ总用时/Σ次数）。单个数据源读取失败或当日无匹配文件不中断整体（执行日志 runLog 记录明细, 执行后该数据源健康标记 error, 全部失败才判定采集失败）。编辑（PUT）绑定字段三态: 字段缺省=沿用原值, `null`=清空, 数字=设置; 绑定变更同样 version+1 并回到 created。预览响应含 `bizDate`（本次数据日期, 按 bizDateMode 推导）。
+>
+> InfluxQL 采集: `collectType=influxql`, 仅可绑定 `type=influxdb`（InfluxDB 1.x）数据源; `collectConfig` 为 `{queryTemplate,valueColumn,aggregate}`, `queryTemplate` 直接填写 InfluxQL 并支持与 SQL 相同的 `${biz_date}` 等模板变量; `valueColumn` 留空时取首个非 `time` 列; `aggregate` 支持 `single/sum/avg/max/min`。
+>
+> 公共自定义变量: 通过 `/flow-variables` 统一维护 `{name,description,value}`, 可被 SQL/InfluxQL/日志 glob/脚本参数引用; 变量名须匹配 `^[A-Za-z0-9_]+$` 且全局唯一, 不得与内置变量 `biz_date/prev_trading_day/next_trading_day/trading_day_offset/system_code/flow_code/metric_code/hour` 重名。运行期优先级为内置变量 > 公共自定义变量 > 流程内脚本参数; 变量值按字面量替换, 不做递归解析。
 
-### 8.1 脚本（scripts）
+### 8.1 公共自定义变量（flow-variables）
+
+| 方法 | 路径 | 说明 | 权限 |
+| --- | --- | --- | --- |
+| GET | /flow-variables | 变量列表（`page/pageSize` 分页，默认按 id 升序；不传 `page` 时返回数组兼容旧调用） | flow:view |
+| POST | /flow-variables | 新增变量 `{name,description,value}` | flow:manage |
+| PUT | /flow-variables/{id} | 编辑变量（重名校验同样生效） | flow:manage |
+| DELETE | /flow-variables/{id} | 删除变量 | flow:manage |
+
+### 8.2 脚本（scripts）
 
 | 方法 | 路径 | 说明 | 权限 |
 | --- | --- | --- | --- |

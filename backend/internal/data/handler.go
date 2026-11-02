@@ -327,7 +327,7 @@ func (h *Handler) RunSummary(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	anchor := clock.DayStart(time.Now()).AddDate(0, 0, -1)
 	if req.BizDate != "" {
-		t, perr := time.Parse("2006-01-02", req.BizDate)
+		t, perr := parseBizDateInLocation(req.BizDate, time.Local)
 		if perr != nil {
 			resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "bizDate 格式 YYYY-MM-DD"))
 			return
@@ -337,6 +337,10 @@ func (h *Handler) RunSummary(c *gin.Context) {
 	go RunDailySummary(context.Background(), h.db, h.log, h.params, h.cal, anchor)
 	middleware.Log(c, "data", "data.summary.run", "", "bizDate="+anchor.Format("2006-01-02"))
 	resp.OK(c, gin.H{"bizDate": anchor.Format("2006-01-02"), "message": "日汇总任务已启动(幂等), 稍后可查询日数据"})
+}
+
+func parseBizDateInLocation(raw string, loc *time.Location) (time.Time, error) {
+	return time.ParseInLocation("2006-01-02", raw, loc)
 }
 
 // Correct 手工修正

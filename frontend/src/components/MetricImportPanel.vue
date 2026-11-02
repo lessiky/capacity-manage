@@ -3,7 +3,7 @@
     <div class="toolbar">
       <input ref="fileInput" type="file" accept=".csv,.json" />
       <el-button type="primary" :icon="Upload" :loading="importing" @click="importFile">上传导入</el-button>
-      <span class="hint">CSV 表头: metricCode,name,systemCode,unit,judgeDirection,warnLine,dangerLine；也支持 JSON 数组</span>
+      <span class="hint">CSV 表头: metricCode,name,systemCode,category,unit,judgeDirection,warnLine,dangerLine；category 留空归入默认分类，也支持 JSON 数组</span>
       <div class="spacer" />
       <el-button :icon="Refresh" circle @click="load" />
     </div>

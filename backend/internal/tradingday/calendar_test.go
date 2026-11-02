@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/testutil"
 )
 
@@ -100,6 +101,26 @@ func TestOffsetUnseededFallbackProbe(t *testing.T) {
 	checkDate(t, got, err, "2026-10-09")
 }
 
+func TestPrevTradingDayNormalizesDatabaseDateToLocalMidnight(t *testing.T) {
+	h := testutil.NewCalHarness(t)
+	ctx := context.Background()
+	utcDate := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	if err := h.DB.Create(&persistence.TradingDayCalendar{
+		Market: "SH", CalDate: utcDate, IsTrading: true, DayType: "trading", Source: "test",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.Calendar().PrevTradingDay(ctx, "SH", time.Date(2026, 10, 29, 9, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := time.Date(2026, 10, 28, 0, 0, 0, 0, time.Local)
+	if !got.Equal(want) {
+		t.Fatalf("got %v (%s), want local midnight %v", got, got.Format(time.RFC3339), want)
+	}
+}
+
 func TestNextTriggerAfter(t *testing.T) {
 	h := testutil.NewCalHarness(t)
 	h.SeedOctober2026()
@@ -144,5 +165,92 @@ func TestNextTriggerAfterWindowRange(t *testing.T) {
 	}
 	if _, err := cal.NextTriggerAfter(ctx, "SH", "bad", from); err == nil {
 		t.Fatal("expected error for bad format")
+	}
+}
+
+// 秒级触发时间: 支持 "HH:MM:SS", 并按秒返回
+func TestNextTriggerAfterSeconds(t *testing.T) {
+	h := testutil.NewCalHarness(t)
+	h.SeedOctober2026()
+	cal := h.Calendar()
+	ctx := context.Background()
+	from := time.Date(2026, 10, 14, 10, 0, 0, 0, time.Local)
+
+	nxt, err := cal.NextTriggerAfter(ctx, "SH", "10:00:30", from)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := time.Date(2026, 10, 14, 10, 0, 30, 0, time.Local)
+	if !nxt.Equal(want) {
+		t.Fatalf("got %s, want %s", nxt.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+
+	// 同一时刻已到达 → 下一交易日
+	nxt, err = cal.NextTriggerAfter(ctx, "SH", "10:00:30", want)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want = time.Date(2026, 10, 15, 10, 0, 30, 0, time.Local)
+	if !nxt.Equal(want) {
+		t.Fatalf("got %s, want %s", nxt.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+
+	if _, err := cal.NextTriggerAfter(ctx, "SH", "10:00:60", from); err == nil {
+		t.Fatal("expected error for bad second")
+	}
+}
+
+func TestPrevTriggerOnOrBefore(t *testing.T) {
+	h := testutil.NewCalHarness(t)
+	h.SeedOctober2026()
+	cal := h.Calendar()
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		window string
+		at     time.Time
+		want   time.Time
+	}{
+		{
+			name:   "weekend uses Friday collection window",
+			window: "00:15",
+			at:     time.Date(2026, 10, 17, 9, 0, 0, 0, time.Local),
+			want:   time.Date(2026, 10, 16, 0, 15, 0, 0, time.Local),
+		},
+		{
+			name:   "Monday before window uses Friday collection window",
+			window: "00:15",
+			at:     time.Date(2026, 10, 19, 0, 10, 0, 0, time.Local),
+			want:   time.Date(2026, 10, 16, 0, 15, 0, 0, time.Local),
+		},
+		{
+			name:   "Monday after window uses Monday collection window",
+			window: "00:15",
+			at:     time.Date(2026, 10, 19, 0, 20, 0, 0, time.Local),
+			want:   time.Date(2026, 10, 19, 0, 15, 0, 0, time.Local),
+		},
+		{
+			name:   "trading morning uses previous trading day evening window",
+			window: "17:30",
+			at:     time.Date(2026, 10, 20, 9, 0, 0, 0, time.Local),
+			want:   time.Date(2026, 10, 19, 17, 30, 0, 0, time.Local),
+		},
+		{
+			name:   "holiday uses previous trading day window",
+			window: "00:15",
+			at:     time.Date(2026, 10, 13, 9, 0, 0, 0, time.Local),
+			want:   time.Date(2026, 10, 12, 0, 15, 0, 0, time.Local),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cal.PrevTriggerOnOrBefore(ctx, "SH", tc.window, tc.at)
+			checkDateTime(t, got, err, tc.want.Format("2006-01-02 15:04"))
+		})
+	}
+
+	if _, err := cal.PrevTriggerOnOrBefore(ctx, "SH", "9:61", time.Now()); err == nil {
+		t.Fatal("expected error for bad minute")
 	}
 }

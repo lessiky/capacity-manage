@@ -3,8 +3,11 @@
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <el-tab-pane label="指标列表" name="list">
         <div class="toolbar">
-          <el-select v-model="filterSystem" clearable filterable placeholder="业务系统" style="width: 170px" @change="reload">
+          <el-select v-model="filterSystem" clearable filterable placeholder="业务系统" style="width: 170px" @change="onFilterSystemChange">
             <el-option v-for="s in systems" :key="s.systemCode" :label="s.name" :value="s.systemCode" />
+          </el-select>
+          <el-select v-model="filterCategory" clearable filterable placeholder="指标分类" style="width: 150px" @change="reload">
+            <el-option v-for="c in filterCategories" :key="c.id" :label="c.name" :value="c.name" />
           </el-select>
           <el-select v-model="filterStatus" clearable placeholder="状态" style="width: 110px" @change="reload">
             <el-option label="启用" value="active" />
@@ -12,6 +15,7 @@
           </el-select>
           <el-button type="primary" :icon="Search" @click="reload">查询</el-button>
           <el-button type="success" :icon="Plus" @click="openCreate()">新建指标</el-button>
+          <el-button :icon="Collection" @click="openCategoryMgmt">指标分类管理</el-button>
           <div style="flex: 1" />
           <el-button :icon="Refresh" circle @click="reload" />
         </div>
@@ -28,6 +32,9 @@
             <template #default="{ row }">{{ row.metricKind === 'normal' ? statModeLabel(row.statMode) : '-' }}</template>
           </el-table-column>
           <el-table-column prop="systemCode" label="系统" width="130" />
+          <el-table-column prop="category" label="指标分类" width="120">
+            <template #default="{ row }">{{ row.category || '默认分类' }}</template>
+          </el-table-column>
           <el-table-column prop="unit" label="单位" width="70" />
           <el-table-column label="阈值模式" width="90">
             <template #default="{ row }">{{ row.thresholdMode === 'percent' ? '百分比' : '绝对值' }}</template>
@@ -66,14 +73,17 @@
 
       <el-tab-pane label="指标树" name="tree">
         <div class="toolbar">
-          <el-select v-model="filterSystem" clearable filterable placeholder="业务系统" style="width: 170px" @change="loadTree">
+          <el-select v-model="filterSystem" clearable filterable placeholder="业务系统" style="width: 170px" @change="onTreeSystemChange">
             <el-option v-for="s in systems" :key="s.systemCode" :label="s.name" :value="s.systemCode" />
+          </el-select>
+          <el-select v-model="treeCategory" clearable filterable placeholder="指标分类" style="width: 150px" @change="loadTree">
+            <el-option v-for="c in treeCategories" :key="c.id" :label="c.name" :value="c.name" />
           </el-select>
           <el-input v-model="treeKeyword" clearable placeholder="名称/编码关键字" style="width: 190px" @keyup.enter="loadTree" @clear="loadTree" />
           <el-button type="primary" :icon="Search" @click="loadTree">查询</el-button>
           <el-button type="success" :icon="Plus" @click="openCreate({ metricKind: 'aggregate' })">新建汇总指标</el-button>
           <div style="flex: 1" />
-          <span class="tree-tip">汇总指标 → 子指标(分组) → 统计模块; 点击节点查看详情</span>
+          <span class="tree-tip">系统 → 指标分类 → 汇总指标 → 子指标(分组) → 统计模块; 点击指标节点查看详情</span>
           <el-button :icon="Refresh" circle @click="loadTree" />
         </div>
         <el-tree
@@ -90,9 +100,10 @@
             <div class="tree-node">
               <el-tag size="small" :type="kindTagType(data.metricKind)" effect="dark" class="tree-kind">{{ kindLabel(data.metricKind) }}</el-tag>
               <span class="tree-name">{{ data.name }}</span>
-              <span class="tree-code">{{ data.metricCode }}</span>
+              <span v-if="data.isSystem || data.isCategory" class="tree-code">{{ data.count }} 个指标</span>
+              <span v-else class="tree-code">{{ data.metricCode }}</span>
               <span v-if="data.metricKind === 'normal'" class="tree-stat" title="统计方法（点击编辑）" @click.stop="openEdit(data)">{{ statModeLabel(data.statMode) }}</span>
-              <span class="tree-actions">
+              <span v-if="!data.isSystem && !data.isCategory" class="tree-actions">
                 <el-button
                   v-if="data.metricKind === 'aggregate' || data.metricKind === 'group'"
                   link type="primary" size="small"
@@ -133,9 +144,15 @@
         <el-form-item label="指标编码" required><el-input v-model="form.metricCode" :disabled="!!editing" placeholder="如 CORE_DB.CAP_USAGE" /></el-form-item>
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="归属系统" required>
-          <el-select v-model="form.systemCode" filterable style="width: 100%">
+          <el-select v-model="form.systemCode" :disabled="!!editing" filterable style="width: 100%" @change="onFormSystemChange">
             <el-option v-for="s in systems" :key="s.systemCode" :label="s.name + ' (' + s.systemCode + ')'" :value="s.systemCode" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="指标分类" required>
+          <el-select v-model="form.category" :disabled="!canEditCategory" filterable placeholder="选择该系统下的指标分类" style="width: 100%">
+            <el-option v-for="c in formCategories" :key="c.id" :label="c.name" :value="c.name" />
+          </el-select>
+          <div v-if="!canEditCategory" class="form-tip">子指标及统计模块的分类由所属汇总指标统一维护</div>
         </el-form-item>
         <el-form-item v-if="form.metricKind === 'group' || form.metricKind === 'normal'" :label="form.metricKind === 'group' ? '所属汇总指标' : '上级指标(可选)'">
           <el-select v-model="form.parentCode" :clearable="form.metricKind === 'normal'" :disabled="!!editing" style="width: 100%" @change="onParentChange" placeholder="无">
@@ -149,7 +166,7 @@
         </el-form-item>
         <el-form-item v-if="form.metricKind === 'normal' && form.parentCode" label="统计模块标识" required>
           <el-input v-model="form.statModule" placeholder="如 count / max_latency / avg_latency" />
-          <div class="form-tip">同一模块标识的指标将在汇总指标中按统计方式合并(求和/取最大/取均值)</div>
+          <div class="form-tip">同一模块标识的指标归入同一统计模块; 模块的求和/取最大/加权平均等汇总方式在汇总指标详情中配置</div>
         </el-form-item>
         <el-form-item v-if="form.metricKind === 'aggregate'" label="主统计模块">
           <el-input v-model="form.mainModule" placeholder="如 count(请求量); 留空=首个模块" />
@@ -227,6 +244,59 @@
       </template>
     </el-dialog>
 
+    <!-- 指标分类管理 -->
+    <el-dialog v-model="catVisible" title="指标分类管理" width="820px">
+      <div class="cat-toolbar">
+        <el-select v-model="catFilterSystem" clearable filterable placeholder="按系统筛选" style="width: 220px" @change="onCatFilterSystemChange">
+          <el-option v-for="s in systems" :key="s.systemCode" :label="s.name" :value="s.systemCode" />
+        </el-select>
+        <el-button type="primary" size="small" :icon="Plus" @click="openCatCreate">新建分类</el-button>
+      </div>
+      <el-table :data="filteredCategories" border stripe size="small" v-loading="catLoading">
+        <el-table-column label="所属系统" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ sysName(row.systemCode) }}</template>
+        </el-table-column>
+        <el-table-column prop="name" label="分类名称" min-width="140" />
+        <el-table-column prop="sort" label="排序" width="70" />
+        <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.remark || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }">{{ fmtTs(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openCatEdit(row)">编辑</el-button>
+            <el-button link type="danger" :disabled="row.name === '默认分类'" @click="doCatDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!catLoading && filteredCategories.length === 0" description="暂无指标分类" :image-size="60" />
+
+      <el-dialog v-model="catFormVisible" :title="catEditingId ? '编辑指标分类' : '新建指标分类'" width="480px" append-to-body>
+        <el-form :model="catForm" label-width="100px">
+          <el-form-item label="所属系统" required>
+            <el-select v-model="catForm.systemCode" :disabled="!!catEditingId" filterable placeholder="选择业务系统" style="width: 100%">
+              <el-option v-for="s in systems" :key="s.systemCode" :label="s.name" :value="s.systemCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="分类名称" required>
+            <el-input v-model="catForm.name" :disabled="catEditingDefault" placeholder="系统内唯一, 如: 计算 / 存储 / 数据库" />
+          </el-form-item>
+          <el-form-item label="排序">
+            <el-input-number v-model="catForm.sort" :min="0" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="catForm.remark" type="textarea" :rows="2" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="catFormVisible = false">取消</el-button>
+          <el-button type="primary" :loading="catSaving" @click="saveCategory">保存</el-button>
+        </template>
+      </el-dialog>
+    </el-dialog>
+
     <!-- 调整阈值 -->
     <el-dialog v-model="thVisible" :title="'调整阈值 - ' + (thRow?.metricCode ?? '')" width="460px">
       <el-form label-width="100px" v-if="thRow">
@@ -266,9 +336,11 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Refresh, Plus } from '@element-plus/icons-vue'
+import { Search, Refresh, Plus, Collection } from '@element-plus/icons-vue'
 import { http } from '@/api/http'
 import { fmtTs } from '@/utils/format'
+import { buildMetricSystemTree } from '@/utils/metricTree'
+import { useQueryTab } from '@/composables/useQueryTab'
 import DerivedMetricsPanel from '@/components/DerivedMetricsPanel.vue'
 import ThresholdTemplatePanel from '@/components/ThresholdTemplatePanel.vue'
 import MetricImportPanel from '@/components/MetricImportPanel.vue'
@@ -277,6 +349,7 @@ interface MetRow {
   metricCode: string
   name: string
   systemCode: string
+  category: string
   unit: string
   metricType: string
   metricKind?: string
@@ -294,7 +367,20 @@ interface MetRow {
   remark: string
 }
 interface SysRow { systemCode: string; name: string }
-interface TreeRow extends MetRow { children?: TreeRow[] }
+interface CategoryRow {
+  id: number
+  systemCode: string
+  name: string
+  sort: number
+  remark: string
+  createdAt: string
+}
+interface TreeRow extends MetRow {
+  children?: TreeRow[]
+  isSystem?: boolean
+  isCategory?: boolean
+  count?: number
+}
 
 const router = useRouter()
 function openDetail(row: MetRow) {
@@ -306,39 +392,76 @@ function openDetail(row: MetRow) {
   }
 }
 function kindLabel(kind?: string): string {
-  return ({ aggregate: '汇总', group: '子指标', normal: '指标' } as Record<string, string>)[kind ?? 'normal'] || '指标'
+  return ({ system: '系统', category: '分类', aggregate: '汇总', group: '子指标', normal: '指标' } as Record<string, string>)[kind ?? 'normal'] || '指标'
 }
 function statModeLabel(mode?: string): string {
   return ({ latest: '最新值', max: '最大值', min: '最小值', avg: '平均值', sum: '求和' } as Record<string, string>)[mode ?? ''] || (mode ?? '-')
 }
 
 function kindTagType(kind?: string): string {
-  return ({ aggregate: 'danger', group: 'warning', normal: 'info' } as Record<string, string>)[kind ?? 'normal'] || 'info'
+  return ({ system: 'success', category: 'primary', aggregate: 'danger', group: 'warning', normal: 'info' } as Record<string, string>)[kind ?? 'normal'] || 'info'
 }
 
-const tab = ref<'list' | 'tree' | 'derived' | 'templates' | 'import'>('list')
+const { activeTab: tab, onTabChange: updateTabQuery } = useQueryTab(
+  ['list', 'tree', 'derived', 'templates', 'import'] as const,
+  'list',
+)
 const items = ref<MetRow[]>([])
 const systems = ref<SysRow[]>([])
+const categories = ref<CategoryRow[]>([])
 const filterSystem = ref('')
+const filterCategory = ref('')
 const filterStatus = ref('')
 const loading = ref(false)
 const error = ref('')
 const page = ref(1)
 const total = ref(0)
+const filterCategories = computed(() => filterSystem.value
+  ? categories.value.filter((c) => c.systemCode === filterSystem.value)
+  : categories.value)
+const treeCategories = computed(() => filterSystem.value
+  ? categories.value.filter((c) => c.systemCode === filterSystem.value)
+  : categories.value)
 
 // ---------- 指标树 ----------
 const treeData = ref<TreeRow[]>([])
 const treeLoading = ref(false)
 const treeKeyword = ref('')
+const treeCategory = ref('')
 let treeLoaded = false
 async function loadTree() {
   treeLoading.value = true
   try {
     const params: Record<string, string> = {}
     if (filterSystem.value) params.systemCode = filterSystem.value
+    if (treeCategory.value) params.category = treeCategory.value
     if (treeKeyword.value.trim()) params.keyword = treeKeyword.value.trim()
-    const data = (await http.get('/api/v1/metrics/tree', { params })) as unknown as { roots: TreeRow[] }
-    treeData.value = data.roots ?? []
+    const data = (await http.get('/api/v1/metrics/tree', { params })) as unknown as {
+      roots: TreeRow[]
+      categories: { category: string; count: number; roots: TreeRow[] }[]
+    }
+    const branches = buildMetricSystemTree<TreeRow>(data.categories ?? [], systems.value)
+    treeData.value = branches.map((system) => ({
+      ...blankForm(),
+      metricCode: `__system__:${system.systemCode}`,
+      name: system.systemName,
+      systemCode: system.systemCode,
+      metricKind: 'system',
+      isSystem: true,
+      count: system.count,
+      children: system.categories.map((group) => ({
+        ...blankForm(),
+        metricCode: `__category__:${system.systemCode}:${group.category}`,
+        name: group.category,
+        category: group.category,
+        systemCode: system.systemCode,
+        metricKind: 'category',
+        isCategory: true,
+        count: group.count,
+        children: group.roots,
+      } as TreeRow)),
+    } as TreeRow))
+    if (treeData.value.length === 0) treeData.value = data.roots ?? []
     treeLoaded = true
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -347,9 +470,11 @@ async function loadTree() {
   }
 }
 function onTabChange(name: string | number) {
+  updateTabQuery(name)
   if (name === 'tree' && !treeLoaded) loadTree()
 }
 function onTreeNodeClick(data: TreeRow) {
+  if (data.isSystem || data.isCategory) return
   openDetail(data)
 }
 
@@ -362,6 +487,7 @@ async function load() {
         page: page.value,
         pageSize: 20,
         ...(filterSystem.value ? { systemCode: filterSystem.value } : {}),
+        ...(filterCategory.value ? { category: filterCategory.value } : {}),
         ...(filterStatus.value ? { status: filterStatus.value } : {}),
       },
     })) as unknown as { items: MetRow[]; total: number }
@@ -381,6 +507,41 @@ async function loadSystems() {
   } catch { /* 无系统时忽略 */ }
 }
 
+async function loadCategories(systemCode = '') {
+  try {
+    const data = (await http.get('/api/v1/metric-categories', {
+      params: systemCode ? { systemCode } : {},
+    })) as unknown as CategoryRow[]
+    if (systemCode) {
+      categories.value = categories.value
+        .filter((c) => c.systemCode !== systemCode)
+        .concat(data ?? [])
+    } else {
+      categories.value = data ?? []
+    }
+  } catch {
+    if (!systemCode) categories.value = []
+  }
+}
+
+async function onFilterSystemChange() {
+  filterCategory.value = ''
+  treeCategory.value = ''
+  await loadCategories(filterSystem.value)
+  await load()
+  if (treeLoaded) await loadTree()
+}
+
+async function onTreeSystemChange() {
+  treeCategory.value = ''
+  await loadCategories(filterSystem.value)
+  await loadTree()
+}
+
+function sysName(code: string) {
+  return systems.value.find((s) => s.systemCode === code)?.name ?? code
+}
+
 // ---------- 新建/编辑 ----------
 const formVisible = ref(false)
 const saving = ref(false)
@@ -388,6 +549,7 @@ const editing = ref(false)
 const blankForm = () => ({
   metricKind: 'normal' as 'normal' | 'group' | 'aggregate',
   metricCode: '', name: '', systemCode: '', unit: '',
+  category: '默认分类',
   parentCode: '', statModule: '', mainModule: '', weightMetricCode: '',
   metricType: 'usage', statMode: 'latest',
   judgeDirection: 'higher_worse', thresholdMode: 'percent',
@@ -395,6 +557,13 @@ const blankForm = () => ({
   baseline: null as number | null, remark: '',
 })
 const form = ref(blankForm())
+const formCategories = computed(() => form.value.systemCode
+  ? categories.value.filter((c) => c.systemCode === form.value.systemCode)
+  : [])
+const canEditCategory = computed(() =>
+  form.value.metricKind === 'aggregate'
+  || (form.value.metricKind === 'normal' && !form.value.parentCode),
+)
 const allMetrics = ref<MetRow[]>([])
 async function loadAllMetrics() {
   try {
@@ -436,10 +605,17 @@ function openCreate(opts?: { metricKind?: 'normal' | 'group' | 'aggregate'; pare
   if (opts?.systemCode) form.value.systemCode = opts.systemCode
   if (form.value.metricKind !== 'normal') form.value.unit = '-'
   editing.value = false
-  loadAllMetrics().then(() => { formVisible.value = true })
+  Promise.all([
+    loadAllMetrics(),
+    opts?.systemCode ? loadCategories(opts.systemCode) : Promise.resolve(),
+  ]).then(() => {
+    syncCategoryWithParent()
+    formVisible.value = true
+  })
 }
 function onParentChange() {
   form.value.weightMetricCode = ''
+  syncCategoryWithParent()
 }
 
 function onKindChange() {
@@ -447,13 +623,33 @@ function onKindChange() {
   form.value.statModule = ''
   form.value.mainModule = ''
   form.value.weightMetricCode = ''
+  form.value.category = '默认分类'
   if (form.value.metricKind !== 'normal' && !form.value.unit) form.value.unit = '-'
 }
+
+function syncCategoryWithParent() {
+  if (!form.value.parentCode) {
+    if (!form.value.category) form.value.category = '默认分类'
+    return
+  }
+  const parent = allMetrics.value.find((m) => m.metricCode === form.value.parentCode)
+  if (parent) form.value.category = parent.category || '默认分类'
+}
+
+async function onFormSystemChange() {
+  form.value.parentCode = ''
+  form.value.statModule = ''
+  form.value.weightMetricCode = ''
+  form.value.category = '默认分类'
+  if (form.value.systemCode) await loadCategories(form.value.systemCode)
+}
+
 function openEdit(row: MetRow) {
   form.value = {
     ...blankForm(),
     ...(row as unknown as Record<string, unknown>),
     metricKind: (row.metricKind ?? 'normal') as 'normal' | 'group' | 'aggregate',
+    category: row.category || '默认分类',
     parentCode: row.parentCode ?? '',
     statModule: row.statModule ?? '',
     mainModule: row.mainModule ?? '',
@@ -461,11 +657,14 @@ function openEdit(row: MetRow) {
     warnLine: row.warnLine, dangerLine: row.dangerLine, baseline: row.baseline,
   } as ReturnType<typeof blankForm>
   editing.value = true
-  loadAllMetrics().then(() => { formVisible.value = true })
+  Promise.all([
+    loadAllMetrics(),
+    loadCategories(row.systemCode),
+  ]).then(() => { formVisible.value = true })
 }
 async function saveForm() {
   const f = form.value
-  if (!f.metricCode || !f.name || !f.systemCode || !f.unit) { ElMessage.warning('请填写必填项'); return }
+  if (!f.metricCode || !f.name || !f.systemCode || !f.category || !f.unit) { ElMessage.warning('请填写必填项'); return }
   if (f.metricKind === 'normal' && f.warnLine == null && f.dangerLine == null) { ElMessage.warning('预警线/危险线至少配置一种'); return }
   if (f.metricKind === 'group' && !f.parentCode) { ElMessage.warning('子指标分组必须选择所属汇总指标'); return }
   if (f.metricKind === 'normal' && f.parentCode && (f.parentCode === '') === false && !f.statModule) {
@@ -475,23 +674,22 @@ async function saveForm() {
   saving.value = true
   try {
     const body: Record<string, unknown> = {
-      metricCode: f.metricCode, name: f.name, systemCode: f.systemCode, unit: f.unit,
+      metricCode: f.metricCode, name: f.name, systemCode: f.systemCode,
+      category: f.category, unit: f.unit,
       metricKind: f.metricKind,
       remark: f.remark,
     }
     if (f.parentCode) body.parentCode = f.parentCode
-    if (f.statModule) body.statModule = f.statModule
     if (f.metricKind === 'aggregate') {
-      if (f.mainModule) body.mainModule = f.mainModule
+      body.mainModule = f.mainModule
       body.judgeDirection = f.judgeDirection
       body.thresholdMode = f.thresholdMode
       body.warnLine = f.warnLine
       body.dangerLine = f.dangerLine
     }
-    if (f.metricKind === 'normal' && f.weightMetricCode) {
-      body.weightMetricCode = f.weightMetricCode
-    }
     if (f.metricKind === 'normal') {
+      body.statModule = f.statModule
+      body.weightMetricCode = f.weightMetricCode
       body.metricType = f.metricType
       body.statMode = f.statMode
       body.judgeDirection = f.judgeDirection
@@ -514,6 +712,106 @@ async function saveForm() {
   } finally {
     saving.value = false
   }
+}
+
+// ---------- 指标分类管理 ----------
+const catVisible = ref(false)
+const catLoading = ref(false)
+const catSaving = ref(false)
+const catFilterSystem = ref('')
+const catFormVisible = ref(false)
+const catEditingId = ref<number | null>(null)
+const catEditingDefault = ref(false)
+const catForm = ref({ systemCode: '', name: '', sort: 0, remark: '' })
+const filteredCategories = computed(() => catFilterSystem.value
+  ? categories.value.filter((c) => c.systemCode === catFilterSystem.value)
+  : categories.value)
+
+async function openCategoryMgmt() {
+  catVisible.value = true
+  catLoading.value = true
+  try {
+    await Promise.all([loadSystems(), loadCategories(catFilterSystem.value)])
+  } finally {
+    catLoading.value = false
+  }
+}
+
+async function onCatFilterSystemChange() {
+  catLoading.value = true
+  try {
+    await loadCategories(catFilterSystem.value)
+  } finally {
+    catLoading.value = false
+  }
+}
+
+function openCatCreate() {
+  catEditingId.value = null
+  catEditingDefault.value = false
+  catForm.value = { systemCode: catFilterSystem.value, name: '', sort: 0, remark: '' }
+  catFormVisible.value = true
+}
+
+function openCatEdit(row: CategoryRow) {
+  catEditingId.value = row.id
+  catEditingDefault.value = row.name === '默认分类'
+  catForm.value = {
+    systemCode: row.systemCode,
+    name: row.name,
+    sort: row.sort ?? 0,
+    remark: row.remark ?? '',
+  }
+  catFormVisible.value = true
+}
+
+async function saveCategory() {
+  if (!catForm.value.systemCode) { ElMessage.warning('请选择所属系统'); return }
+  if (!catForm.value.name.trim()) { ElMessage.warning('请输入分类名称'); return }
+  catSaving.value = true
+  try {
+    if (catEditingId.value) {
+      await http.put(`/api/v1/metric-categories/${catEditingId.value}`, {
+        name: catForm.value.name,
+        remark: catForm.value.remark,
+        sort: catForm.value.sort,
+      })
+      ElMessage.success('已更新')
+    } else {
+      await http.post('/api/v1/metric-categories', {
+        systemCode: catForm.value.systemCode,
+        name: catForm.value.name,
+        remark: catForm.value.remark,
+        sort: catForm.value.sort,
+      })
+      ElMessage.success('已创建')
+    }
+    catFormVisible.value = false
+    filterCategory.value = ''
+    treeCategory.value = ''
+    await loadCategories(catForm.value.systemCode)
+    await load()
+    if (treeLoaded) await loadTree()
+  } catch { /* 后端已提示 */ } finally {
+    catSaving.value = false
+  }
+}
+
+async function doCatDelete(row: CategoryRow) {
+  try {
+    await ElMessageBox.confirm(`确认删除指标分类「${sysName(row.systemCode)} / ${row.name}」? 分类下仍有指标时无法删除。`, '删除指标分类', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await http.delete(`/api/v1/metric-categories/${row.id}`)
+    ElMessage.success('已删除')
+    filterCategory.value = ''
+    treeCategory.value = ''
+    await loadCategories(row.systemCode)
+    await load()
+    if (treeLoaded) await loadTree()
+  } catch { /* 后端已提示 */ }
 }
 
 // ---------- 调阈值 / 历史 ----------
@@ -584,11 +882,16 @@ async function doDelete(row: MetRow) {
 
 const reload = load
 
-onMounted(() => { loadSystems(); load() })
+onMounted(async () => {
+  await Promise.all([loadSystems(), loadCategories()])
+  await load()
+  if (tab.value === 'tree') loadTree()
+})
 </script>
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.cat-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 .tree-tip { font-size: 12px; color: #909399; }
 .tree-node { display: flex; align-items: center; flex: 1; min-width: 0; gap: 6px; padding-right: 8px; }

@@ -28,7 +28,8 @@ func TestEngine_RunSectionCategoryFlow(t *testing.T) {
 	h := testutil.NewDBHarness(t)
 	h.Migrate(&persistence.CollectFlow{}, &persistence.CapacityMetric{}, &persistence.DataSource{},
 		&persistence.CollectTaskLog{}, &persistence.CleaningTrace{}, &persistence.MetricValueRT{},
-		&persistence.AlertRecord{}, &persistence.TradingDayCalendar{}, &persistence.BusinessSystem{}, &persistence.SysParam{})
+		&persistence.AlertRecord{}, &persistence.TradingDayCalendar{}, &persistence.BusinessSystem{},
+		&persistence.SysParam{}, &persistence.FlowVariable{})
 	cipher, cerr := aesgcm.New("0000000000000000000000000000000000000000000000000000000000000000")
 	if cerr != nil {
 		t.Fatal(cerr)
@@ -137,7 +138,8 @@ func TestEngine_RunSectionFlow(t *testing.T) {
 	h := testutil.NewDBHarness(t)
 	h.Migrate(&persistence.CollectFlow{}, &persistence.CapacityMetric{}, &persistence.DataSource{},
 		&persistence.CollectTaskLog{}, &persistence.CleaningTrace{}, &persistence.MetricValueRT{},
-		&persistence.AlertRecord{}, &persistence.TradingDayCalendar{}, &persistence.BusinessSystem{}, &persistence.SysParam{})
+		&persistence.AlertRecord{}, &persistence.TradingDayCalendar{}, &persistence.BusinessSystem{},
+		&persistence.SysParam{}, &persistence.FlowVariable{})
 	for off := -20; off <= 20; off++ {
 		d := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), 0, 0, 0, 0, time.Local).AddDate(0, 0, off)
 		wd := d.Weekday()

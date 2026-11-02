@@ -106,10 +106,10 @@ ON CONFLICT (key) DO NOTHING;
 INSERT INTO alert_escalation_policy
   (name, source_line, target_level, mode, consecutive_days, window_days, hit_days, priority, created_by)
 VALUES
-  ('默认-预警连续3天升级P2', 'warn', 'p2', 'consecutive', 3, NULL, NULL, 100, 'system'),
-  ('默认-预警7天3次升级P2', 'warn', 'p2', 'window_count', NULL, 7, 3, 90, 'system'),
-  ('默认-危险连续2天升级P1', 'danger', 'p1', 'consecutive', 2, NULL, NULL, 100, 'system'),
-  ('默认-危险5天2次升级P1', 'danger', 'p1', 'window_count', NULL, 5, 2, 90, 'system')
+  ('默认-预警连续4天升级P2', 'warn', 'p2', 'consecutive', 4, NULL, NULL, 100, 'system'),
+  ('默认-预警7天5次升级P2', 'warn', 'p2', 'window_count', NULL, 7, 53, 90, 'system'),
+  ('默认-危险连续3天升级P1', 'danger', 'p1', 'consecutive', 3, NULL, NULL, 100, 'system'),
+  ('默认-危险5天3次升级P1', 'danger', 'p1', 'window_count', NULL, 5, 3, 90, 'system')
 ON CONFLICT (name) DO NOTHING;
 
 DO $$

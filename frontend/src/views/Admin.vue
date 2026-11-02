@@ -269,6 +269,29 @@
         </el-table>
       </el-tab-pane>
 
+      <!-- ============ 运维操作 ============ -->
+      <el-tab-pane label="运维操作" name="operations">
+        <el-form label-width="110px" style="max-width: 760px">
+          <el-divider content-position="left">手工日汇总</el-divider>
+          <el-form-item label="业务日期">
+            <el-date-picker v-model="opsSummaryDate" type="date" value-format="YYYY-MM-DD" style="width: 180px" />
+            <el-button type="primary" :icon="Refresh" :loading="opsSummaryRunning" @click="runManualSummary">执行汇总</el-button>
+          </el-form-item>
+          <el-form-item label="执行结果">
+            <span class="dim">{{ opsSummaryResult || '-' }}</span>
+          </el-form-item>
+
+          <el-divider content-position="left">手工重算报表</el-divider>
+          <el-form-item label="业务日期">
+            <el-date-picker v-model="opsReportDate" type="date" value-format="YYYY-MM-DD" style="width: 180px" />
+            <el-button type="primary" :icon="Refresh" :loading="opsReportRunning" @click="runManualReport">重算报表</el-button>
+          </el-form-item>
+          <el-form-item label="执行结果">
+            <span class="dim">{{ opsReportResult || '-' }}</span>
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+
       <!-- ============ 保留与归档 ============ -->
       <el-tab-pane label="保留与归档" name="retention">
         <RetentionArchive v-if="tab === 'retention'" />
@@ -638,6 +661,62 @@ async function loadHealth() {
     dsLoading.value = false
   }
 }
+
+// ---------- 运维操作 ----------
+function defaultOpsDate(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const opsSummaryDate = ref(defaultOpsDate())
+const opsSummaryRunning = ref(false)
+const opsSummaryResult = ref('')
+async function runManualSummary() {
+  if (!opsSummaryDate.value) { ElMessage.warning('请选择业务日期'); return }
+  const ok = await ElMessageBox.confirm(
+    `确认对业务日期 ${opsSummaryDate.value} 执行日汇总？`, '手工日汇总', { type: 'warning' })
+    .then(() => true).catch(() => false)
+  if (!ok) return
+  opsSummaryRunning.value = true
+  try {
+    const res = (await http.post('/api/v1/data/summary/run', { bizDate: opsSummaryDate.value })) as unknown as {
+      bizDate?: string
+      message?: string
+    }
+    opsSummaryResult.value = res.message || `已提交 ${res.bizDate || opsSummaryDate.value}`
+    ElMessage.success('日汇总任务已启动')
+    await loadHealth()
+  } finally {
+    opsSummaryRunning.value = false
+  }
+}
+
+const opsReportDate = ref(defaultOpsDate())
+const opsReportRunning = ref(false)
+const opsReportResult = ref('')
+async function runManualReport() {
+  if (!opsReportDate.value) { ElMessage.warning('请选择业务日期'); return }
+  const ok = await ElMessageBox.confirm(
+    `确认重新生成业务日期 ${opsReportDate.value} 的日报？`, '手工重算报表', { type: 'warning' })
+    .then(() => true).catch(() => false)
+  if (!ok) return
+  opsReportRunning.value = true
+  try {
+    const res = (await http.post(`/api/v1/reports/daily/${opsReportDate.value}/generate`)) as unknown as {
+      status?: string
+    }
+    opsReportResult.value = res.status ? `状态: ${res.status}` : '重算完成'
+    ElMessage.success('日报已重新生成')
+    await loadHealth()
+  } finally {
+    opsReportRunning.value = false
+  }
+}
+
 function fmtBytes(n: number | null | undefined): string {
   if (n == null) return '-'
   if (n < 1024) return n + ' B'

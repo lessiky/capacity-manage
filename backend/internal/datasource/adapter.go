@@ -22,7 +22,7 @@ import (
 
 // Config 数据源配置（凭据解密后的临时对象, 禁止落日志明文）
 type Config struct {
-	Type string `json:"type"` // db / log / ssh
+	Type string `json:"type"` // db / log / influxdb / ssh
 
 	Driver   string `json:"driver,omitempty"` // oracle / mysql
 	Host     string `json:"host,omitempty"`
@@ -32,11 +32,12 @@ type Config struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	TestSQL  string `json:"testSql,omitempty"`
+	Secure   bool   `json:"secure,omitempty"`
 
-	Scheme      string `json:"scheme,omitempty"` // local / sftp
+	Scheme       string `json:"scheme,omitempty"` // local / sftp
 	PathTemplate string `json:"pathTemplate,omitempty"`
 	GlobTemplate string `json:"globTemplate,omitempty"`
-	Encoding    string `json:"encoding,omitempty"`
+	Encoding     string `json:"encoding,omitempty"`
 
 	// ssh 执行目标(远程脚本采集): 脚本与参数经 SFTP 落到 TempDir, 执行后删除
 	OS      string `json:"os,omitempty"`      // linux / windows
@@ -222,14 +223,12 @@ func (logAdapter) Test(ctx context.Context, cfg *Config, render func(string) str
 	}
 }
 
-
-
 type Registry struct {
-	db      *gorm.DB
-	cipher  *aesgcm.Cipher
-	cfg     *config.Config
-	log     *slog.Logger
-	byType  map[string]DataSourceAdapter
+	db     *gorm.DB
+	cipher *aesgcm.Cipher
+	cfg    *config.Config
+	log    *slog.Logger
+	byType map[string]DataSourceAdapter
 	// renderTpl 模板变量渲染钩子（app 组装时注入, 按当前日期推导 ${biz_date}/${prev_trading_day} 等）;
 	// 供日志数据源连接测试使用, 与采集执行保持同一路径口径
 	renderTpl func(ctx context.Context, template string) string
@@ -265,6 +264,8 @@ func (r *Registry) Test(ctx context.Context, src *persistence.DataSource) (TestR
 		return logAdapter{}.Test(ctx, &cfg, render)
 	case "ssh":
 		return sshAdapter{}.Test(ctx, &cfg)
+	case "influxdb":
+		return influxdbAdapter{}.Test(ctx, &cfg)
 	default:
 		return TestResult{OK: false, Message: "未知数据源类型: " + cfg.Type}, nil
 	}
@@ -305,6 +306,13 @@ func (r *Registry) DecryptForCollect(cfg *Config) error {
 		}
 		cfg.Password = p
 	}
+	if cfg.Type == "influxdb" && cfg.Password != "" {
+		p, err := r.decryptPassword(cfg.Password)
+		if err != nil {
+			return err
+		}
+		cfg.Password = p
+	}
 	return nil
 }
 
@@ -324,4 +332,3 @@ func (r *Registry) UpdateHealth(src *persistence.DataSource, ok bool, errMsg str
 	}
 	_ = r.db.Model(src).Updates(updates).Error
 }
-

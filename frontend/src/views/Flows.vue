@@ -2,6 +2,7 @@
   <div class="page-card">
     <el-tabs v-model="activeTab" class="module-tabs" @tab-change="onTabChange">
       <el-tab-pane label="采集流程" name="flows" />
+      <el-tab-pane label="变量配置" name="variables" />
       <el-tab-pane label="脚本管理" name="scripts" />
       <el-tab-pane label="任务监控" name="tasks" />
     </el-tabs>
@@ -16,6 +17,7 @@
       </el-select>
       <el-select v-model="filterType" clearable placeholder="采集方式" style="width: 160px" @change="reload">
         <el-option label="SQL" value="sql" />
+        <el-option label="InfluxQL" value="influxql" />
         <el-option label="日志解析" value="logparse" />
         <el-option label="Python 采集(沙箱)" value="python" />
         <el-option label="脚本采集(目标机)" value="script" />
@@ -40,7 +42,7 @@
       </el-table-column>
       <el-table-column label="调度" min-width="150" show-overflow-tooltip>
         <template #default="{ row }">
-          {{ row.scheduleMode === "trading_day" ? `交易日 ${row.windowTime || "-"} (${bizDateLabel(row.bizDateMode)})` : row.cronExpr || "-" }}
+          {{ row.scheduleMode === "trading_day" ? `交易日 ${normalizeWindowTime(row.windowTime || "") || row.windowTime || "-"} (${bizDateLabel(row.bizDateMode)})` : row.cronExpr || "-" }}
         </template>
       </el-table-column>
       <el-table-column prop="version" label="版本" width="70" />
@@ -125,6 +127,7 @@
               </el-select>
               <div v-if="form.collectType === 'python'" class="field-hint">平台沙箱不访问数据源, 此处可留空</div>
               <div v-if="form.collectType === 'script'" class="field-hint">脚本采集须选择"执行目标"(类型 ssh)数据源; 脚本与参数下发到该主机的临时目录执行</div>
+              <div v-if="form.collectType === 'influxql'" class="field-hint">InfluxQL 采集须选择 InfluxDB 1.x 数据源</div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -139,6 +142,7 @@
             <el-form-item label="采集方式" required>
               <el-radio-group v-model="form.collectType" :disabled="!!editingId">
                 <el-radio value="sql">SQL</el-radio>
+                <el-radio value="influxql">InfluxQL</el-radio>
                 <el-radio value="logparse">日志解析</el-radio>
                 <el-radio value="python">Python 采集（平台沙箱·不访问目标机）</el-radio>
                 <el-radio value="script">脚本采集（目标机执行）</el-radio>
@@ -172,7 +176,7 @@
             <el-input v-model="form.sqlConfig.sqlTemplate" type="textarea" :rows="5" placeholder="SELECT ... WHERE biz_date = '${biz_date}'" />
           </el-form-item>
           <el-alert type="info" :closable="false" style="margin-bottom: 12px">
-            支持变量: ${biz_date} ${prev_trading_day} ${next_trading_day} ${system_code} ${hour} ${trading_day_offset:N} ${trading_day_offset:N:格式}; 日期变量可自定义格式, 如 ${prev_trading_day:YYYYMMDD}
+            支持内置变量: ${biz_date} ${prev_trading_day} ${next_trading_day} ${system_code} ${hour} ${trading_day_offset:N} ${trading_day_offset:N:格式}, 以及变量配置中的公共自定义变量; 日期变量可自定义格式, 如 ${prev_trading_day:YYYYMMDD}
           </el-alert>
           <el-row :gutter="12">
             <el-col :span="12">
@@ -183,6 +187,33 @@
             <el-col :span="12">
               <el-form-item label="多行聚合">
                 <el-select v-model="form.sqlConfig.aggregate" style="width: 100%">
+                  <el-option label="直取(单值)" value="single" />
+                  <el-option label="求和 sum" value="sum" />
+                  <el-option label="平均 avg" value="avg" />
+                  <el-option label="最大 max" value="max" />
+                  <el-option label="最小 min" value="min" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </template>
+        <template v-else-if="form.collectType === 'influxql'">
+          <el-form-item label="InfluxQL 模板" required>
+            <el-input v-model="form.influxConfig.queryTemplate" type="textarea" :rows="5"
+              placeholder="SELECT mean(&quot;value&quot;) FROM &quot;capacity&quot; WHERE time &gt;= '${biz_date}T00:00:00Z'" />
+          </el-form-item>
+          <el-alert type="info" :closable="false" style="margin-bottom: 12px">
+            直接填写 InfluxQL 查询模板; 支持内置变量: ${biz_date} ${prev_trading_day} ${next_trading_day} ${system_code} ${hour} ${trading_day_offset:N} ${trading_day_offset:N:格式}, 以及变量配置中的公共自定义变量; 日期变量可自定义格式, 如 ${prev_trading_day:YYYYMMDD}
+          </el-alert>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="取值列">
+                <el-input v-model="form.influxConfig.valueColumn" placeholder="结果集中取值列名(留空取首个非 time 列)" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="多行聚合">
+                <el-select v-model="form.influxConfig.aggregate" style="width: 100%">
                   <el-option label="直取(单值)" value="single" />
                   <el-option label="求和 sum" value="sum" />
                   <el-option label="平均 avg" value="avg" />
@@ -316,7 +347,7 @@
           </el-row>
         </template>
 
-        <template v-else>
+        <template v-else-if="form.collectType === 'script'">
           <el-alert type="warning" :closable="false" style="margin-bottom: 12px"
             title="脚本采集在执行目标主机上真实执行: 脚本与参数经 SFTP 落到临时目录(执行后删除); 出参为 stdout 最后一行 JSON" />
           <el-row :gutter="12">
@@ -344,7 +375,7 @@
               <el-button link type="primary" @click="form.scriptConfig.params.push({ key: '', value: '' })">+ 添加参数</el-button>
             </div>
             <div class="field-hint">
-              脚本从同目录 params.json 读取; 平台内置变量(biz_date/prev_trading_day/system_code 等)会自动合并下发且优先于同名自定义参数
+              脚本从同目录 params.json 读取; 平台内置变量和变量配置中的公共自定义变量会自动合并下发且优先于同名流程参数
             </div>
           </el-form-item>
         </template>
@@ -359,18 +390,12 @@
         <el-form-item v-if="form.scheduleMode === 'normal'" label="cron 表达式" required>
           <el-input v-model="form.cronExpr" placeholder="5 段(分钟级) 或 6 段(秒级), 如 0 17 * * * 或 0 0 17 * * *" style="width: 300px" />
         </el-form-item>
-        <el-form-item v-else label="非交易时点" required>
-          <el-select v-model="form.windowTime" style="width: 240px" placeholder="选择时点">
-            <el-option-group label="当日（收盘后 15:00 - 23:45）">
-              <el-option v-for="t in windowOptionsEvening" :key="t" :label="t" :value="t" />
-            </el-option-group>
-            <el-option-group label="次日（开盘前 00:00 - 09:00）">
-              <el-option v-for="t in windowOptionsMorning" :key="t" :label="t" :value="t" />
-            </el-option-group>
-          </el-select>
+        <el-form-item v-else label="触发时间" required>
+          <el-time-picker v-model="form.windowTime" format="HH:mm:ss" value-format="HH:mm:ss"
+            :clearable="false" placeholder="选择触发时间" style="width: 240px" />
         </el-form-item>
         <div v-if="form.scheduleMode === 'trading_day'" style="margin: -8px 0 12px 110px; color: var(--el-text-color-secondary); font-size: 12px">
-          仅支持非交易时点: 15:00 至次日 09:00, 15 分钟一个间隔; 交易日该时点触发采集
+          仅在该市场交易日触发，支持精确到秒
         </div>
 
         <el-divider content-position="left">清洗配置</el-divider>
@@ -462,7 +487,7 @@
         <el-descriptions-item label="采集方式">{{ typeLabel(detail.collectType) }}</el-descriptions-item>
         <el-descriptions-item label="数据日期">{{ bizDateLabel(detail.bizDateMode) }}</el-descriptions-item>
         <el-descriptions-item label="调度">
-          {{ detail.scheduleMode === "trading_day" ? `交易日 ${detail.windowTime || "-"} (${bizDateLabel(detail.bizDateMode)})` : detail.cronExpr }}
+          {{ detail.scheduleMode === "trading_day" ? `交易日 ${normalizeWindowTime(detail.windowTime || "") || detail.windowTime || "-"} (${bizDateLabel(detail.bizDateMode)})` : detail.cronExpr }}
         </el-descriptions-item>
         <el-descriptions-item label="版本">{{ detail.version }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
@@ -481,6 +506,7 @@
     <AiAssistant v-model="aiAssistantVisible" />
     </div>
 
+    <FlowVariables v-if="activeTab === 'variables'" />
     <Scripts v-if="activeTab === 'scripts'" embedded />
     <Tasks v-if="activeTab === 'tasks'" embedded />
   </div>
@@ -492,9 +518,11 @@ import { ElMessage, ElMessageBox } from "element-plus"
 import { Search, Refresh, Plus, Delete, MagicStick } from "@element-plus/icons-vue"
 import { http } from "@/api/http"
 import { fmtTs } from "@/utils/format"
+import { loadActiveMetricOptions } from "@/utils/metricOptions"
 import { useList } from "@/composables/useList"
 import { useQueryTab } from "@/composables/useQueryTab"
 import AiAssistant from "@/components/AiAssistant.vue"
+import FlowVariables from "@/components/FlowVariables.vue"
 import Scripts from "@/views/Scripts.vue"
 import Tasks from "@/views/Tasks.vue"
 
@@ -532,15 +560,15 @@ interface PreviewRes {
 }
 
 const aiAssistantVisible = ref(false)
-const { activeTab, onTabChange } = useQueryTab(['flows', 'scripts', 'tasks'] as const, 'flows')
+const { activeTab, onTabChange } = useQueryTab(['flows', 'variables', 'scripts', 'tasks'] as const, 'flows')
 
 const STATUS_LABELS: Record<string, string> = { created: "已创建", active: "生效中", disabled: "已停用", archived: "已归档" }
 const statusLabel = (s: string) => STATUS_LABELS[s] ?? s
 const STATUS_TAGS: Record<string, string> = { created: "info", active: "success", disabled: "warning", archived: "info" }
 const statusTag = (s: string) => STATUS_TAGS[s] ?? "info"
-const TYPE_LABELS: Record<string, string> = { sql: "SQL", logparse: "日志解析", python: "Python(沙箱)", script: "脚本采集(目标机)" }
+const TYPE_LABELS: Record<string, string> = { sql: "SQL", influxql: "InfluxQL", logparse: "日志解析", python: "Python(沙箱)", script: "脚本采集(目标机)" }
 const typeLabel = (s: string) => TYPE_LABELS[s] ?? s
-const TYPE_TAGS: Record<string, string> = { sql: "", logparse: "warning", python: "success", script: "danger" }
+const TYPE_TAGS: Record<string, string> = { sql: "", influxql: "primary", logparse: "warning", python: "success", script: "danger" }
 const typeTag = (s: string) => TYPE_TAGS[s] ?? "info"
 const LANGUAGE_LABELS: Record<string, string> = { python: "Python", bash: "Bash", powershell: "PowerShell" }
 const languageLabel = (lang?: string) => LANGUAGE_LABELS[lang ?? "python"] ?? "Python"
@@ -549,10 +577,12 @@ const languageLabel = (lang?: string) => LANGUAGE_LABELS[lang ?? "python"] ?? "P
 const dsRequired = computed(() =>
   form.collectType !== "python" && (form.collectType !== "logparse" || !form.dataSourceCategoryId),
 )
-// 脚本采集只能在"执行目标"(ssh)上跑; 其余采集方式的数据源排除执行目标
-const selectableDatasources = computed(() =>
-  datasources.value.filter((d) => (form.collectType === "script" ? d.type === "ssh" : d.type !== "ssh")),
-)
+// 脚本采集只能在"执行目标"(ssh)上跑; InfluxQL 仅能绑定 InfluxDB 1.x; 其余采集方式排除特殊数据源
+const selectableDatasources = computed(() => {
+  if (form.collectType === "script") return datasources.value.filter((d) => d.type === "ssh")
+  if (form.collectType === "influxql") return datasources.value.filter((d) => d.type === "influxdb")
+  return datasources.value.filter((d) => d.type !== "ssh" && d.type !== "influxdb")
+})
 const collectScripts = computed(() => scripts.value.filter((s) => s.scriptType === "collect"))
 const pythonCollectScripts = computed(() =>
   collectScripts.value.filter((s) => !s.language || s.language === "python"),
@@ -588,27 +618,17 @@ const catLogGlobs = computed(() => {
   return Array.from(seen).sort()
 })
 
-// 非交易时点合法性: 15:00 至次日 09:00, 15 分钟一个间隔
-function isValidWindowPoint(v: string): boolean {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(v || "")
-  if (!m) return false
+// 触发时间: 兼容旧格式 HH:MM, 统一规范为 HH:MM:SS
+function normalizeWindowTime(v: string): string {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec((v || "").trim())
+  if (!m) return ""
   const hh = Number(m[1])
   const mm = Number(m[2])
-  if (mm % 15 !== 0) return false
-  return hh >= 15 || hh < 9 || (hh === 9 && mm === 0)
-}
-
-// 非交易时点选项: 当日 15:00-23:45 / 次日 00:00-09:00 (15 分钟间隔)
-const buildWindowOptions = () => {
+  const ss = Number(m[3] ?? 0)
+  if (hh > 23 || mm > 59 || ss > 59) return ""
   const pad = (n: number) => String(n).padStart(2, "0")
-  const fmt = (m: number) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`
-  const evening: string[] = []
-  for (let m = 15 * 60; m < 24 * 60; m += 15) evening.push(fmt(m))
-  const morning: string[] = []
-  for (let m = 0; m <= 9 * 60; m += 15) morning.push(fmt(m))
-  return { evening, morning }
+  return `${pad(hh)}:${pad(mm)}:${pad(ss)}`
 }
-const { evening: windowOptionsEvening, morning: windowOptionsMorning } = buildWindowOptions()
 
 const filterStatus = ref("")
 const filterType = ref("")
@@ -622,8 +642,9 @@ const scripts = ref<ScriptRow[]>([])
 const systems = ref<{ systemCode: string; name: string }[]>([])
 async function loadOptions() {
   try {
-    const m = (await http.get("/api/v1/metrics", { params: { page: 1, pageSize: 500 } })) as unknown as { items: MetRow[] }
-    metrics.value = (m.items ?? []).filter((x) => x.status === "active")
+    metrics.value = await loadActiveMetricOptions(async (params) => {
+      return (await http.get("/api/v1/metrics", { params })) as unknown as { items: MetRow[]; total: number }
+    })
     const d = (await http.get("/api/v1/data-sources")) as unknown as DsRow[]
     datasources.value = d ?? []
     const dc = (await http.get("/api/v1/data-source-categories")) as unknown as DsCatRow[]
@@ -671,11 +692,17 @@ function applyAiDraft() {
   const d = aiDraft.value
   if (!d) return
   const ct = d.collectType
-  if (typeof ct === "string" && ["sql", "logparse", "python"].includes(ct)) form.collectType = ct
+  if (typeof ct === "string" && ["sql", "influxql", "logparse", "python"].includes(ct)) form.collectType = ct
   const cc = (d.collectConfig ?? {}) as Record<string, unknown>
   if (form.collectType === "sql") {
     Object.assign(form.sqlConfig, {
       sqlTemplate: aiStr(cc.sqlTemplate ?? cc.sql_template),
+      valueColumn: aiStr(cc.valueColumn ?? cc.value_column),
+      aggregate: aiStr(cc.aggregate) || "single",
+    })
+  } else if (form.collectType === "influxql") {
+    Object.assign(form.influxConfig, {
+      queryTemplate: aiStr(cc.queryTemplate ?? cc.query_template),
       valueColumn: aiStr(cc.valueColumn ?? cc.value_column),
       aggregate: aiStr(cc.aggregate) || "single",
     })
@@ -712,7 +739,8 @@ function applyAiDraft() {
   if (d.bizDateMode === "natural" || d.bizDateMode === "prev_day" || d.bizDateMode === "calendar") form.bizDateMode = d.bizDateMode
   const wt = aiStr(d.windowTime)
   const wp = wt.includes("-") ? wt.split("-")[0] : wt
-  if (isValidWindowPoint(wp)) form.windowTime = wp
+  const normalizedWindowTime = normalizeWindowTime(wp)
+  if (normalizedWindowTime) form.windowTime = normalizedWindowTime
   ElMessage.success("AI 建议已应用到表单，请审核后预览试跑再保存")
 }
 
@@ -729,10 +757,11 @@ const form = reactive({
   collectType: "sql",
   scheduleMode: "normal",
   cronExpr: "",
-  windowTime: "09:00",
+  windowTime: "09:00:00",
   bizDateMode: "natural",
   remark: "",
   sqlConfig: { sqlTemplate: "", valueColumn: "", aggregate: "single" },
+  influxConfig: { queryTemplate: "", valueColumn: "", aggregate: "single" },
   logConfig: { mode: "regex", pattern: "", delimiters: ",", valueField: "", unitField: "", fileGlob: "", startMarker: "", endMarker: "", linePattern: "", prefixes: "", excludePrefixes: "", output: "avg" },
   pyConfig: { scriptId: null as number | null, version: 0 },
   scriptConfig: { scriptId: null as number | null, version: 0, params: [] as { key: string; value: string }[] },
@@ -743,8 +772,9 @@ const fieldsText = ref("{}")
 function blank() {
   Object.assign(form, {
     flowCode: "", name: "", metricCode: "", dataSourceId: null, dataSourceCategoryId: null, collectType: "sql",
-    scheduleMode: "normal", cronExpr: "", windowTime: "09:00", bizDateMode: "natural", remark: "",
+    scheduleMode: "normal", cronExpr: "", windowTime: "09:00:00", bizDateMode: "natural", remark: "",
     sqlConfig: { sqlTemplate: "", valueColumn: "", aggregate: "single" },
+    influxConfig: { queryTemplate: "", valueColumn: "", aggregate: "single" },
     logConfig: { mode: "regex", pattern: "", delimiters: ",", valueField: "", unitField: "", fileGlob: "", startMarker: "", endMarker: "", linePattern: "", prefixes: "", excludePrefixes: "", output: "avg" },
     pyConfig: { scriptId: null, version: 0 },
     scriptConfig: { scriptId: null, version: 0, params: [] },
@@ -763,10 +793,10 @@ function openEdit(row: FlowRow) {
   const cc = safeParse(row.collectConfig)
   const kc = safeParse(row.cleanConfig)
   // 回显调度模式(修复: 此前未回显, 交易日模式编辑时误显示为普通 cron)
-  // 非交易时点: 兼容存量范围 "HH:MM-HH:MM"(取起点)与非法值(回退默认 09:00)
+  // 触发时间: 兼容存量范围 "HH:MM-HH:MM"(取起点)与旧格式 HH:MM, 统一规范为 HH:MM:SS
   const wt = row.windowTime || ""
   const wp = wt.includes("-") ? wt.split("-")[0] : wt
-  const windowTime = isValidWindowPoint(wp) ? wp : "09:00"
+  const windowTime = normalizeWindowTime(wp) || "09:00:00"
   Object.assign(form, {
     flowCode: row.flowCode, name: row.name, metricCode: row.metricCode,
     dataSourceId: row.dataSourceId ?? null, dataSourceCategoryId: row.dataSourceCategoryId ?? null, collectType: row.collectType,
@@ -779,6 +809,12 @@ function openEdit(row: FlowRow) {
   if (row.collectType === "sql") {
     Object.assign(form.sqlConfig, {
       sqlTemplate: cc.sqlTemplate || cc.sql_template || "",
+      valueColumn: cc.valueColumn || cc.value_column || "",
+      aggregate: cc.aggregate || "single",
+    })
+  } else if (row.collectType === "influxql") {
+    Object.assign(form.influxConfig, {
+      queryTemplate: cc.queryTemplate || cc.query_template || "",
       valueColumn: cc.valueColumn || cc.value_column || "",
       aggregate: cc.aggregate || "single",
     })
@@ -828,6 +864,14 @@ watch(
   (t) => {
     if (t !== "logparse") form.dataSourceCategoryId = null
     if (t === "python") form.dataSourceId = null
+    if (t === "influxql") {
+      const current = datasources.value.find((d) => d.id === form.dataSourceId)
+      if (current && current.type !== "influxdb") form.dataSourceId = null
+    }
+    if (t !== "influxql") {
+      const current = datasources.value.find((d) => d.id === form.dataSourceId)
+      if (current && current.type === "influxdb") form.dataSourceId = null
+    }
   },
 )
 
@@ -835,6 +879,8 @@ function buildBody() {
   let collectConfig: Record<string, unknown>
   if (form.collectType === "sql") {
     collectConfig = { ...form.sqlConfig }
+  } else if (form.collectType === "influxql") {
+    collectConfig = { ...form.influxConfig }
   } else if (form.collectType === "logparse") {
     if (form.logConfig.mode === "section") {
       collectConfig = {
@@ -904,8 +950,13 @@ async function saveForm() {
     return
   }
   if (form.scheduleMode === "normal" && !form.cronExpr.trim()) { ElMessage.warning("请填写 cron 表达式"); return }
-  if (form.scheduleMode === "trading_day" && !form.windowTime) { ElMessage.warning("请选择非交易时点"); return }
+  if (form.scheduleMode === "trading_day") {
+    const windowTime = normalizeWindowTime(form.windowTime)
+    if (!windowTime) { ElMessage.warning("请选择触发时间"); return }
+    form.windowTime = windowTime
+  }
   if (form.collectType === "python" && !form.pyConfig.scriptId) { ElMessage.warning("请选择 Python 脚本"); return }
+  if (form.collectType === "influxql" && !form.influxConfig.queryTemplate.trim()) { ElMessage.warning("请填写 InfluxQL 模板"); return }
   if (form.collectType === "script" && !form.scriptConfig.scriptId) { ElMessage.warning("请选择脚本"); return }
   saving.value = true
   try {

@@ -64,6 +64,259 @@ func TestPickBizDateTrading(t *testing.T) {
 	}
 }
 
+// 回归: 带交易日历的流程, 调度器传入的 anchor 已是目标业务日;
+// 日汇总不得再执行一次 PrevTradingDay, 否则会把 10-26 错误回退到 10-23。
+func TestSummarizeDayCalendarUsesSummaryDayWithoutSecondRollback(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	dep.Cal = tradingday.NewCalendar(h.DB, h.RDB, nil)
+	bizDate := time.Date(2026, 10, 26, 0, 0, 0, 0, time.Local)
+	for _, d := range []time.Time{
+		time.Date(2026, 10, 23, 0, 0, 0, 0, time.Local),
+		bizDate,
+	} {
+		if err := h.DB.Create(&persistence.TradingDayCalendar{
+			Market: "SH", CalDate: d, IsTrading: true, DayType: "trading", Source: "test",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.DB.Create(&persistence.BusinessSystem{
+		SystemCode: "S1", Name: "系统一", Owner: "admin", Status: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "A5_JZJY_ORDER_CNT_ALL", Name: "订单量", SystemCode: "S1",
+		MetricKind: "normal", MetricType: "absolute", Unit: "笔", StatMode: "latest", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DB.Create(&persistence.CollectFlow{
+		FlowCode: "A5_JZJY_ORDER_CNT_ALL_FLOW", Name: "订单量采集",
+		MetricCode: "A5_JZJY_ORDER_CNT_ALL", ScheduleMode: "trading_day",
+		TradingMarket: "SH", BizDateMode: "calendar", Status: "active", Enabled: true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	value := 82.0
+	if err := h.DB.Create(&persistence.MetricValueRT{
+		MetricCode: "A5_JZJY_ORDER_CNT_ALL", Ts: bizDate.Add(15 * time.Minute),
+		RawValue: &value, CleanValue: &value, JudgeLevel: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	done, missing, err := store.SummarizeDay(context.Background(), bizDate, dep)
+	if err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if done != 1 || missing != 0 {
+		t.Fatalf("done=%d missing=%d, want 1/0", done, missing)
+	}
+	var day persistence.MetricValueDay
+	if err := h.DB.Where("metric_code = ? AND biz_date = ?", "A5_JZJY_ORDER_CNT_ALL", bizDate).
+		First(&day).Error; err != nil {
+		t.Fatalf("day row for %s: %v", bizDate.Format("2006-01-02"), err)
+	}
+	if day.StatValue == nil || *day.StatValue != value || day.PointCount != 1 {
+		t.Fatalf("day row = stat %v point_count %d, want %.0f/1", day.StatValue, day.PointCount, value)
+	}
+	var wrongCount int64
+	if err := h.DB.Model(&persistence.MetricValueDay{}).
+		Where("metric_code = ? AND biz_date = ?", "A5_JZJY_ORDER_CNT_ALL",
+			time.Date(2026, 10, 23, 0, 0, 0, 0, time.Local)).
+		Count(&wrongCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if wrongCount != 0 {
+		t.Fatalf("unexpected rollback day rows = %d, want 0", wrongCount)
+	}
+}
+
+func TestSummarizeScheduledDayNaturalUsesLastCompletedTradingRun(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	dep.Cal = tradingday.NewCalendar(h.DB, h.RDB, nil)
+	seedScheduledSummaryCalendar(t, h)
+	seedScheduledSummaryFlow(t, h, "F_NATURAL_18", "M_NATURAL_18", "natural", "18:00:00")
+
+	friday := time.Date(2026, 10, 16, 18, 0, 0, 0, time.Local)
+	value := 42.0
+	if err := h.DB.Create(&persistence.MetricValueRT{
+		MetricCode: "M_NATURAL_18", Ts: friday, RawValue: &value, CleanValue: &value,
+		JudgeLevel: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	anchor := time.Date(2026, 10, 18, 0, 0, 0, 0, time.Local)
+	asOf := time.Date(2026, 10, 18, 0, 10, 0, 0, time.Local)
+	done, missing, bizDates, err := store.SummarizeScheduledDay(context.Background(), anchor, asOf, dep)
+	if err != nil {
+		t.Fatalf("scheduled summarize: %v", err)
+	}
+	if done != 1 || missing != 0 {
+		t.Fatalf("done=%d missing=%d, want 1/0", done, missing)
+	}
+	if len(bizDates) != 1 || !bizDates[0].Equal(time.Date(2026, 10, 16, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("summarized dates = %v, want 2026-10-16", bizDates)
+	}
+	assertNoDayRow(t, h, "M_NATURAL_18", anchor)
+	assertDayRowValue(t, h, "M_NATURAL_18", time.Date(2026, 10, 16, 0, 0, 0, 0, time.Local), value)
+}
+
+func TestSummarizeScheduledDayPrevDayUsesLastCompletedTradingRun(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	dep.Cal = tradingday.NewCalendar(h.DB, h.RDB, nil)
+	seedScheduledSummaryCalendar(t, h)
+	seedScheduledSummaryFlow(t, h, "F_PREV_18", "M_PREV_18", "prev_day", "18:00:00")
+
+	thursday := time.Date(2026, 10, 15, 18, 0, 0, 0, time.Local)
+	value := 42.0
+	if err := h.DB.Create(&persistence.MetricValueRT{
+		MetricCode: "M_PREV_18", Ts: thursday, RawValue: &value, CleanValue: &value,
+		JudgeLevel: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	anchor := time.Date(2026, 10, 17, 0, 0, 0, 0, time.Local)
+	asOf := time.Date(2026, 10, 17, 0, 10, 0, 0, time.Local)
+	done, missing, bizDates, err := store.SummarizeScheduledDay(context.Background(), anchor, asOf, dep)
+	if err != nil {
+		t.Fatalf("scheduled summarize: %v", err)
+	}
+	if done != 1 || missing != 0 {
+		t.Fatalf("done=%d missing=%d, want 1/0", done, missing)
+	}
+	if len(bizDates) != 1 || !bizDates[0].Equal(time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("summarized dates = %v, want 2026-10-15", bizDates)
+	}
+	assertNoDayRow(t, h, "M_PREV_18", anchor)
+	assertDayRowValue(t, h, "M_PREV_18", time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local), value)
+}
+
+func TestSummarizeScheduledDayCalendarUsesLastCompletedTradingRun(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	dep.Cal = tradingday.NewCalendar(h.DB, h.RDB, nil)
+	seedScheduledSummaryCalendar(t, h)
+	seedScheduledSummaryFlow(t, h, "F_CAL_0015", "M_CAL_0015", "calendar", "00:15:00")
+
+	thursday := time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local)
+	value := 42.0
+	if err := h.DB.Create(&persistence.MetricValueRT{
+		MetricCode: "M_CAL_0015", Ts: thursday.Add(18 * time.Hour),
+		RawValue: &value, CleanValue: &value, JudgeLevel: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	anchor := time.Date(2026, 10, 17, 0, 0, 0, 0, time.Local)
+	asOf := time.Date(2026, 10, 17, 3, 0, 0, 0, time.Local)
+	done, missing, bizDates, err := store.SummarizeScheduledDay(context.Background(), anchor, asOf, dep)
+	if err != nil {
+		t.Fatalf("scheduled summarize: %v", err)
+	}
+	if done != 1 || missing != 0 {
+		t.Fatalf("done=%d missing=%d, want 1/0", done, missing)
+	}
+	if len(bizDates) != 1 || !bizDates[0].Equal(thursday) {
+		t.Fatalf("summarized dates = %v, want 2026-10-15", bizDates)
+	}
+	assertNoDayRow(t, h, "M_CAL_0015", anchor)
+	assertDayRowValue(t, h, "M_CAL_0015", thursday, value)
+}
+
+func TestSummarizeDayManualKeepsExplicitNonTradingAnchor(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	dep.Cal = tradingday.NewCalendar(h.DB, h.RDB, nil)
+	seedScheduledSummaryCalendar(t, h)
+	seedScheduledSummaryFlow(t, h, "F_MANUAL", "M_MANUAL", "natural", "18:00:00")
+
+	anchor := time.Date(2026, 10, 18, 0, 0, 0, 0, time.Local)
+	done, missing, err := store.SummarizeDay(context.Background(), anchor, dep)
+	if err != nil {
+		t.Fatalf("manual summarize: %v", err)
+	}
+	if done != 0 || missing != 1 {
+		t.Fatalf("done=%d missing=%d, want 0/1", done, missing)
+	}
+	var row persistence.MetricValueDay
+	if err := h.DB.Where("metric_code = ? AND biz_date = ?", "M_MANUAL", anchor).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Level != "missing" {
+		t.Fatalf("manual row level = %q, want missing", row.Level)
+	}
+}
+
+func seedScheduledSummaryCalendar(t *testing.T, h *testutil.DBHarness) {
+	t.Helper()
+	for _, d := range []struct {
+		date    time.Time
+		trading bool
+	}{
+		{time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local), true},
+		{time.Date(2026, 10, 16, 0, 0, 0, 0, time.Local), true},
+		{time.Date(2026, 10, 17, 0, 0, 0, 0, time.Local), false},
+		{time.Date(2026, 10, 18, 0, 0, 0, 0, time.Local), false},
+	} {
+		if err := h.DB.Create(&persistence.TradingDayCalendar{
+			Market: "SH", CalDate: d.date, IsTrading: d.trading,
+			DayType: map[bool]string{true: "trading", false: "weekend"}[d.trading], Source: "test",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func seedScheduledSummaryFlow(t *testing.T, h *testutil.DBHarness, flowCode, metricCode, bizMode, window string) {
+	t.Helper()
+	systemCode := "SYS_" + flowCode
+	if err := h.DB.Create(&persistence.BusinessSystem{
+		SystemCode: systemCode, Name: flowCode, Owner: "admin", Status: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: metricCode, Name: metricCode, SystemCode: systemCode,
+		MetricKind: "normal", MetricType: "absolute", Unit: "-", StatMode: "latest", Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DB.Create(&persistence.CollectFlow{
+		FlowCode: flowCode, Name: flowCode, MetricCode: metricCode,
+		ScheduleMode: "trading_day", TradingMarket: "SH", WindowTime: window,
+		BizDateMode: bizMode, Status: "active", Enabled: true,
+		CreatedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoDayRow(t *testing.T, h *testutil.DBHarness, metricCode string, bizDate time.Time) {
+	t.Helper()
+	var n int64
+	if err := h.DB.Model(&persistence.MetricValueDay{}).
+		Where("metric_code = ? AND biz_date = ?", metricCode, bizDate).
+		Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("unexpected day row for %s %s", metricCode, bizDate.Format("2006-01-02"))
+	}
+}
+
+func assertDayRowValue(t *testing.T, h *testutil.DBHarness, metricCode string, bizDate time.Time, want float64) {
+	t.Helper()
+	var row persistence.MetricValueDay
+	if err := h.DB.Where("metric_code = ? AND biz_date = ?", metricCode, bizDate).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Level != "normal" || row.StatValue == nil || *row.StatValue != want {
+		t.Fatalf("day row = level %q stat %v, want normal/%v", row.Level, row.StatValue, want)
+	}
+}
+
 // 回归: 日汇总重跑时日内数据已不可用, 已有的有效日值不得被 missing 覆盖。
 func TestSummarizeDayPreservesExistingValueWithoutRT(t *testing.T) {
 	h, store, dep := newSumHarness(t)
@@ -113,6 +366,7 @@ func newSumHarness(t *testing.T) (*testutil.DBHarness, *Store, *SummaryDeps) {
 	h := testutil.NewDBHarness(t)
 	h.Migrate(&persistence.CapacityMetric{}, &persistence.MetricValueDay{}, &persistence.MetricValueRT{},
 		&persistence.AlertRecord{}, &persistence.BusinessSystem{}, &persistence.CollectFlow{},
+		&persistence.MetricStatModule{}, &persistence.TradingDayCalendar{},
 		&persistence.MetricPeakStat{}, &persistence.AlertDailyHit{},
 		&persistence.AlertEscalationPolicy{}, &persistence.AlertLevelHistory{})
 	params := system.NewParams(h.DB)
@@ -194,6 +448,72 @@ func TestSummarizeDayAggregateAlert(t *testing.T) {
 	_ = h.DB.Where("metric_code = ? AND status IN ('active','processing')", "SRV").Find(&again).Error
 	if len(again) != 1 {
 		t.Fatalf("alerts after re-run = %d, want 1 (merge)", len(again))
+	}
+}
+
+// TestSummarizeDayAggregateConfiguredModuleSum 模块汇总方式与普通指标日内方式解耦:
+// 两个普通指标 latest 分别取 40/100, count 模块显式 sum 后汇总值应为 140。
+func TestSummarizeDayAggregateConfiguredModuleSum(t *testing.T) {
+	h, store, dep := newSumHarness(t)
+	anchor := time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local)
+	_ = h.DB.Create(&persistence.BusinessSystem{SystemCode: "S1", Name: "系统一", Owner: "admin", Status: "normal"}).Error
+	_ = h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "SRV", Name: "服务请求", SystemCode: "S1", MetricKind: "aggregate",
+		Unit: "-", MainModule: "count", Status: "active",
+	}).Error
+	for _, g := range []string{"SRV.ORD", "SRV.PAY"} {
+		pc := "SRV"
+		_ = h.DB.Create(&persistence.CapacityMetric{
+			MetricCode: g, Name: "子指标", SystemCode: "S1", MetricKind: "group",
+			ParentCode: &pc, Unit: "-", Status: "active",
+		}).Error
+	}
+	for _, c := range []struct {
+		code, parent string
+	}{
+		{"SRV.ORD.COUNT", "SRV.ORD"},
+		{"SRV.PAY.COUNT", "SRV.PAY"},
+	} {
+		pc := c.parent
+		if err := h.DB.Create(&persistence.CapacityMetric{
+			MetricCode: c.code, Name: "请求量", SystemCode: "S1", MetricKind: "normal",
+			ParentCode: &pc, StatModule: "count", Unit: "笔", StatMode: "latest", Status: "active",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.DB.Create(&persistence.MetricStatModule{
+		AggregateCode: "SRV", ModuleKey: "count", AggMode: "sum",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []struct {
+		code string
+		v    float64
+	}{
+		{"SRV.ORD.COUNT", 60}, {"SRV.ORD.COUNT", 40},
+		{"SRV.PAY.COUNT", 100}, {"SRV.PAY.COUNT", 100},
+	} {
+		v := p.v
+		_ = h.DB.Create(&persistence.MetricValueRT{
+			MetricCode: p.code, Ts: anchor.Add(time.Duration(i+1) * time.Hour), RawValue: &v, CleanValue: &v,
+			JudgeLevel: "normal",
+		}).Error
+	}
+
+	done, missing, err := store.SummarizeDay(context.Background(), anchor, dep)
+	if err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if done != 2 || missing != 0 {
+		t.Fatalf("done=%d missing=%d, want 2/0", done, missing)
+	}
+	var day persistence.MetricValueDay
+	if err := h.DB.Where("metric_code = ? AND biz_date = ?", "SRV", anchor).First(&day).Error; err != nil {
+		t.Fatalf("aggregate day row: %v", err)
+	}
+	if day.StatValue == nil || *day.StatValue != 140 {
+		t.Fatalf("aggregate stat = %v, want 140", day.StatValue)
 	}
 }
 

@@ -153,6 +153,28 @@ type CapacityMetric struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+// MetricCategory 指标分类（分类必须归属业务系统, 系统内名称唯一）。
+type MetricCategory struct {
+	ID         int64     `gorm:"primaryKey" json:"id"`
+	SystemCode string    `gorm:"size:64;uniqueIndex:uk_metric_category_system_name" json:"systemCode"`
+	Name       string    `gorm:"size:32;uniqueIndex:uk_metric_category_system_name" json:"name"`
+	Remark     string    `gorm:"size:512" json:"remark"`
+	Sort       int       `json:"sort"`
+	CreatedBy  string    `gorm:"size:64" json:"createdBy"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+// MetricStatModule 汇总指标下的统计模块配置。
+// AggMode 只描述跨子指标的合并方式, 与普通指标自身的 StatMode(日内取值)解耦。
+type MetricStatModule struct {
+	AggregateCode string    `gorm:"primaryKey;size:64" json:"aggregateCode"`
+	ModuleKey     string    `gorm:"primaryKey;size:32" json:"moduleKey"`
+	AggMode       string    `gorm:"size:16;not null" json:"aggMode"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
 type ThresholdHistory struct {
 	ID          int64     `gorm:"primaryKey" json:"id"`
 	MetricCode  string    `gorm:"size:64;index" json:"metricCode"`
@@ -248,6 +270,18 @@ type CollectFlow struct {
 	CreatedBy            string    `gorm:"size:64" json:"createdBy"`
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
+}
+
+// FlowVariable 采集流程可引用的公共自定义变量。
+// 变量名使用与模板占位符一致的 [A-Za-z0-9_]+，且不得与内置变量重名（由服务端校验）。
+type FlowVariable struct {
+	ID          int64     `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"uniqueIndex;size:64" json:"name"`
+	Description string    `gorm:"size:512" json:"description"`
+	Value       string    `gorm:"type:text" json:"value"`
+	CreatedBy   string    `gorm:"size:64" json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type CollectTaskLog struct {

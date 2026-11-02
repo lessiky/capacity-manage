@@ -290,7 +290,13 @@ func (e *Engine) doAttempt(ctx context.Context, fl *persistence.CollectFlow, met
 		res.ErrMsg = "变量解析失败: " + err.Error()
 		return res
 	}
-	// 数据日期: 与日汇总口径一致(data.PickBizDate)。prev_day=上一自然日, calendar=上一交易日(推导失败回退自然日, 不阻断)
+	publicVars, err := loadPublicVariableValues(e.db)
+	if err != nil {
+		res.ErrMsg = "公共变量加载失败: " + err.Error()
+		return res
+	}
+	vars = mergePublicVariables(vars, publicVars)
+	// 采集数据日期: prev_day=上一自然日, calendar=上一交易日(推导失败回退自然日, 不阻断)
 	bizDay := data.PickBizDate(ctx, e.cal, fl, base)
 	if forced, ok := ctx.Value(backfillBizDateKey{}).(time.Time); ok && !forced.IsZero() {
 		bizDay = clock.DayStart(forced)

@@ -1,6 +1,7 @@
 package bizsystem
 
 import (
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -92,15 +93,20 @@ func (h *Handler) Get(c *gin.Context) {
 
 func (h *Handler) Create(c *gin.Context) {
 	var req struct {
-		SystemCode string     `json:"systemCode" binding:"required,min=2,max=64"`
-		Name       string     `json:"name" binding:"required"`
-		Dept       string     `json:"dept"`
-		Owner      string     `json:"owner" binding:"required"`
-		Level      string     `json:"level" binding:"omitempty,oneof=core important general"`
-		OnlineDate *time.Time `json:"onlineDate"`
-		Remark     string     `json:"remark"`
+		SystemCode string  `json:"systemCode" binding:"required,min=2,max=64"`
+		Name       string  `json:"name" binding:"required"`
+		Dept       string  `json:"dept"`
+		Owner      string  `json:"owner" binding:"required"`
+		Level      string  `json:"level" binding:"omitempty,oneof=core important general"`
+		OnlineDate *string `json:"onlineDate"`
+		Remark     string  `json:"remark"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "参数错误: %v", err))
+		return
+	}
+	onlineDate, err := parseOptionalDay(req.OnlineDate)
+	if err != nil {
 		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "参数错误: %v", err))
 		return
 	}
@@ -112,7 +118,7 @@ func (h *Handler) Create(c *gin.Context) {
 	s := persistence.BusinessSystem{
 		SystemCode: req.SystemCode, Name: req.Name, Dept: req.Dept,
 		Owner: req.Owner, Level: req.Level, Status: "normal",
-		OnlineDate: req.OnlineDate, Remark: req.Remark, CreatedBy: un,
+		OnlineDate: onlineDate, Remark: req.Remark, CreatedBy: un,
 	}
 	if err := h.db.Create(&s).Error; err != nil {
 		resp.Fail(c, resp.NewErr(resp.CodeConflict, "创建失败(编码或名称已存在?)"))
@@ -473,4 +479,19 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// parseOptionalDay 兼容前端日期选择器的 "YYYY-MM-DD" 与 API 调用的 RFC3339。
+func parseOptionalDay(raw *string) (*time.Time, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	value := strings.TrimSpace(*raw)
+	for _, layout := range []string{"2006-01-02", "2006-01-02T15:04:05", time.RFC3339} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			day := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.Local)
+			return &day, nil
+		}
+	}
+	return nil, fmt.Errorf("上线日期格式应为 YYYY-MM-DD")
 }

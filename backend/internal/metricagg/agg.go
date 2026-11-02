@@ -10,11 +10,16 @@ type Pair struct {
 
 // Mode 模块跨子指标合并方式:
 //   - 仅一个子指标: self(直接取值)
+//   - 配置模块汇总方式: 使用配置值(权重指标不覆盖显式配置)
 //   - 任一子指标配置了权重指标: weighted_avg(加权均值)
 //   - 否则: 取首个子指标的 statMode(sum/max/min/avg, 默认 max)
-func Mode(statModes []string, weights []*string) string {
+func Mode(override string, statModes []string, weights []*string) string {
 	if len(statModes) <= 1 {
 		return "self"
+	}
+	switch override {
+	case "sum", "max", "min", "avg", "weighted_avg":
+		return override
 	}
 	for _, w := range weights {
 		if w != nil && *w != "" {

@@ -35,7 +35,6 @@ temp/
 output/
 testing/
 .superpowers/
-db/
 
 # Python
 __pycache__/
