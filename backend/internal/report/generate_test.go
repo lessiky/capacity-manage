@@ -193,6 +193,176 @@ func TestCollectDailyMissing(t *testing.T) {
 	}
 }
 
+// seedTradingDayFlow 建一个 trading_day + calendar 模式的指标/流程。cal 非 nil 时
+// 写入业务日的交易日历行, 用于验证报表缺数判定的交易日感知与日历兜底。
+func seedTradingDayFlow(t *testing.T, h *testutil.DBHarness, bd time.Time, cal *persistence.TradingDayCalendar) {
+	t.Helper()
+	if err := h.DB.Create(&persistence.BusinessSystem{SystemCode: "SYS_A", Name: "系统A", Status: "normal"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DB.Create(&persistence.CapacityMetric{
+		MetricCode: "M_WK", Name: "交易日指标", SystemCode: "SYS_A",
+		Status: "active", MetricKind: "normal",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 流程建档早于业务日, 因此不会被"新建流程"规则豁免
+	if err := h.DB.Create(&persistence.CollectFlow{
+		FlowCode: "F_WK", Name: "交易日流程", MetricCode: "M_WK", CollectType: "sql",
+		CollectConfig: "{}", CleanConfig: "{}", Status: "active", Enabled: true,
+		ScheduleMode: "trading_day", BizDateMode: "calendar", TradingMarket: "SH",
+		WindowTime: "17:30:00", CreatedAt: bd.AddDate(0, 0, -10),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cal != nil {
+		if err := h.DB.Create(cal).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// 上一交易日(calendar)流程落在周六时, 报表不得把该指标判成缺数。
+func TestCollectDailyNonTradingDayIsNotMissing(t *testing.T) {
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},
+		&persistence.CollectFlow{}, &persistence.CollectTaskLog{}, &persistence.ForecastRun{},
+		&persistence.ForecastResult{}, &persistence.AlertRecord{}, &persistence.AlertLevelHistory{},
+		&persistence.TradingDayCalendar{})
+	bd := time.Date(2026, 10, 17, 0, 0, 0, 0, time.Local) // 周六
+	seedTradingDayFlow(t, h, bd, &persistence.TradingDayCalendar{
+		Market: "SH", CalDate: bd, IsTrading: false, DayType: "weekend", Source: "test",
+	})
+
+	d, err := CollectDaily(h.DB, nil, bd)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(d.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(d.Rows))
+	}
+	if got := d.Rows[0].Level; got != "nodata" {
+		t.Fatalf("level = %s, want nodata", got)
+	}
+	if c := d.Status(); c.Missing != 0 || c.Nodata != 1 {
+		t.Fatalf("status = %+v", c)
+	}
+}
+
+// 交易日仍必须判缺数, 防止"一律 nodata"的过度修复。
+func TestCollectDailyTradingDayStillMissing(t *testing.T) {
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},
+		&persistence.CollectFlow{}, &persistence.CollectTaskLog{}, &persistence.ForecastRun{},
+		&persistence.ForecastResult{}, &persistence.AlertRecord{}, &persistence.AlertLevelHistory{},
+		&persistence.TradingDayCalendar{})
+	bd := time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local) // 周四, 交易日
+	seedTradingDayFlow(t, h, bd, &persistence.TradingDayCalendar{
+		Market: "SH", CalDate: bd, IsTrading: true, DayType: "trading", Source: "test",
+	})
+
+	d, err := CollectDaily(h.DB, nil, bd)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(d.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(d.Rows))
+	}
+	if got := d.Rows[0].Level; got != "missing" {
+		t.Fatalf("level = %s, want missing", got)
+	}
+}
+
+// 日历缺行时按周末规则兜底: 工作日仍判缺数, 不能因日历未初始化而全部记为 nodata。
+func TestCollectDailyCalendarMissingFallsBackToWeekday(t *testing.T) {
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},
+		&persistence.CollectFlow{}, &persistence.CollectTaskLog{}, &persistence.ForecastRun{},
+		&persistence.ForecastResult{}, &persistence.AlertRecord{}, &persistence.AlertLevelHistory{},
+		&persistence.TradingDayCalendar{})
+	bd := time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local) // 周四, 交易日
+	seedTradingDayFlow(t, h, bd, nil)
+
+	d, err := CollectDaily(h.DB, nil, bd)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(d.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(d.Rows))
+	}
+	if got := d.Rows[0].Level; got != "missing" {
+		t.Fatalf("level = %s, want missing", got)
+	}
+}
+
+// seedCalendarRange 按周末规则写入 [from,to] 的交易日历(工作日为交易日)。
+func seedCalendarRange(t *testing.T, h *testutil.DBHarness, from, to time.Time) {
+	t.Helper()
+	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+		isTrading := d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
+		dayType := "trading"
+		if !isTrading {
+			dayType = "weekend"
+		}
+		if err := h.DB.Create(&persistence.TradingDayCalendar{
+			Market: "SH", CalDate: d, IsTrading: isTrading, DayType: dayType, Source: "test",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// 上一交易日(calendar)流程的数据尚未到点(业务日晚于最近一次调度可产出的业务日)时,
+// 报表不得判缺数——否则 00:30 自动生成的"昨日"日报会整片报缺数。
+func TestCollectDailyNotYetDueIsNotMissing(t *testing.T) {
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},
+		&persistence.CollectFlow{}, &persistence.CollectTaskLog{}, &persistence.ForecastRun{},
+		&persistence.ForecastResult{}, &persistence.AlertRecord{}, &persistence.AlertLevelHistory{},
+		&persistence.TradingDayCalendar{})
+	seedCalendarRange(t, h, time.Date(2026, 11, 2, 0, 0, 0, 0, time.Local), time.Date(2026, 11, 13, 0, 0, 0, 0, time.Local))
+	bd := time.Date(2026, 11, 6, 0, 0, 0, 0, time.Local) // 周五
+	seedTradingDayFlow(t, h, bd, nil)
+	// 周六 00:30 生成日报: 最近一次调度是周五 17:30, 产出业务日仍是周四
+	asOf := time.Date(2026, 11, 7, 0, 30, 0, 0, time.Local)
+
+	d, err := collectDailyAsOf(h.DB, nil, bd, asOf)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(d.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(d.Rows))
+	}
+	if got := d.Rows[0].Level; got != "nodata" {
+		t.Fatalf("level = %s, want nodata", got)
+	}
+}
+
+// 数据已到点(下一交易日的调度跑过之后)仍必须判缺数, 防止过度修复掩盖真缺数。
+func TestCollectDailyDueDayStillMissing(t *testing.T) {
+	h := testutil.NewDBHarness(t)
+	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},
+		&persistence.CollectFlow{}, &persistence.CollectTaskLog{}, &persistence.ForecastRun{},
+		&persistence.ForecastResult{}, &persistence.AlertRecord{}, &persistence.AlertLevelHistory{},
+		&persistence.TradingDayCalendar{})
+	seedCalendarRange(t, h, time.Date(2026, 11, 2, 0, 0, 0, 0, time.Local), time.Date(2026, 11, 13, 0, 0, 0, 0, time.Local))
+	bd := time.Date(2026, 11, 6, 0, 0, 0, 0, time.Local) // 周五
+	seedTradingDayFlow(t, h, bd, nil)
+	// 周二 00:30: 周一 17:30 已跑过, 周五业务日应已产出
+	asOf := time.Date(2026, 11, 10, 0, 30, 0, 0, time.Local)
+
+	d, err := collectDailyAsOf(h.DB, nil, bd, asOf)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(d.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(d.Rows))
+	}
+	if got := d.Rows[0].Level; got != "missing" {
+		t.Fatalf("level = %s, want missing", got)
+	}
+}
+
 func TestCollectDailyScope(t *testing.T) {
 	h := testutil.NewDBHarness(t)
 	h.Migrate(&persistence.BusinessSystem{}, &persistence.CapacityMetric{}, &persistence.MetricValueDay{},

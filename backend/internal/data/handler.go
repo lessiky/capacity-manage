@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"capacity-manage/backend/internal/alert"
@@ -35,7 +36,7 @@ type Handler struct {
 func NewHandler(store *Store, db *gorm.DB, az *middleware.AuthZ, params *system.Params, cal *tradingday.Calendar, log *slog.Logger) *Handler {
 	return &Handler{
 		store: store, db: db, az: az, params: params, cal: cal, log: log,
-		quality: NewQualityService(db, params),
+		quality: NewQualityService(db, params, cal),
 	}
 }
 
@@ -90,6 +91,11 @@ func (h *Handler) scopedMetricCodes(c *gin.Context, reqCodes []string) ([]string
 // 兼容: 不带 page 参数返回数组(limit 上限, 旧客户端/脚本); 带 page 时返回 {items,total,page,pageSize}
 func (h *Handler) QueryRT(c *gin.Context) {
 	from, to := timeRange(c)
+	level, ok := queryAllowed(c, "level", "normal", "warn", "danger")
+	if !ok {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "level 仅支持 normal/warn/danger"))
+		return
+	}
 	codes, ok := h.scopedMetricCodes(c, splitQuery(c, "metricCodes"))
 	if !ok {
 		return
@@ -106,7 +112,7 @@ func (h *Handler) QueryRT(c *gin.Context) {
 				size = n
 			}
 		}
-		rows, total, err := h.store.QueryRTPage(c.Request.Context(), codes, from, to, page, size)
+		rows, total, err := h.store.QueryRTPage(c.Request.Context(), codes, from, to, level, page, size)
 		if err != nil {
 			resp.Fail(c, err)
 			return
@@ -120,7 +126,7 @@ func (h *Handler) QueryRT(c *gin.Context) {
 			limit = n
 		}
 	}
-	rows, err := h.store.QueryRT(c.Request.Context(), codes, from, to, limit)
+	rows, err := h.store.QueryRT(c.Request.Context(), codes, from, to, level, limit)
 	if err != nil {
 		resp.Fail(c, err)
 		return
@@ -132,6 +138,11 @@ func (h *Handler) QueryRT(c *gin.Context) {
 // 兼容: 不带 page 参数返回全量数组（旧客户端/脚本）; 带 page 时返回 {items,total,page,pageSize}
 func (h *Handler) QueryDay(c *gin.Context) {
 	from, to := timeRange(c)
+	level, ok := queryAllowed(c, "level", "normal", "warn", "danger", "missing")
+	if !ok {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "level 仅支持 normal/warn/danger/missing"))
+		return
+	}
 	codes, ok := h.scopedMetricCodes(c, splitQuery(c, "metricCodes"))
 	if !ok {
 		return
@@ -148,7 +159,7 @@ func (h *Handler) QueryDay(c *gin.Context) {
 				size = n
 			}
 		}
-		rows, total, err := h.store.QueryDayPage(c.Request.Context(), codes, from, to, page, size)
+		rows, total, err := h.store.QueryDayPage(c.Request.Context(), codes, from, to, level, page, size)
 		if err != nil {
 			resp.Fail(c, err)
 			return
@@ -156,7 +167,7 @@ func (h *Handler) QueryDay(c *gin.Context) {
 		resp.OK(c, resp.Page(rows, total, page, size))
 		return
 	}
-	rows, err := h.store.QueryDay(c.Request.Context(), codes, from, to)
+	rows, err := h.store.QueryDay(c.Request.Context(), codes, from, to, level)
 	if err != nil {
 		resp.Fail(c, err)
 		return
@@ -414,7 +425,16 @@ func (h *Handler) ListCorrections(c *gin.Context) {
 
 // ListQuality returns persisted daily quality scores in the requested range.
 func (h *Handler) ListQuality(c *gin.Context) {
+	if h.quality != nil {
+		_ = h.quality.CleanupPremature(c.Request.Context(), time.Now())
+	}
 	from, to := timeRange(c)
+	flag, ok := queryAllowed(c, "flag",
+		"normal", "no_data", "missing_days", "late_days", "anomaly_ratio", "duplicates", "stale")
+	if !ok {
+		resp.Fail(c, resp.NewErr(resp.CodeBadRequest, "flag 值无效"))
+		return
+	}
 	metricCode := c.Query("metricCode")
 	if metricCode != "" {
 		codes, ok := h.scopedMetricCodes(c, []string{metricCode})
@@ -427,6 +447,7 @@ func (h *Handler) ListQuality(c *gin.Context) {
 		}
 	}
 	q := h.db.Model(&persistence.MetricQualityDay{}).Where("biz_date >= ? AND biz_date < ?", from, to)
+	q = applyQualityFlagFilter(q, flag)
 	if metricCode != "" {
 		q = q.Where("metric_code = ?", metricCode)
 	}
@@ -625,6 +646,31 @@ func timeRange(c *gin.Context) (time.Time, time.Time) {
 		to = from.AddDate(0, 0, 1)
 	}
 	return from, to
+}
+
+func queryAllowed(c *gin.Context, name string, allowed ...string) (string, bool) {
+	value := strings.TrimSpace(c.Query(name))
+	if value == "" {
+		return "", true
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func applyQualityFlagFilter(q *gorm.DB, flag string) *gorm.DB {
+	if flag == "" {
+		return q
+	}
+	if flag == "normal" {
+		// 无标记的正常行既可能以列默认值 "[]" 存储, 也可能因
+		// json.Marshal(nil) 被写成 "null"; 同时兼容空串与 NULL 历史数据。
+		return q.Where("flags IS NULL OR flags = '' OR flags = '[]' OR flags = 'null'")
+	}
+	return q.Where("flags LIKE ?", `%"`+flag+`"%`)
 }
 
 func splitQuery(c *gin.Context, name string) []string {

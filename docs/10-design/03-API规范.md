@@ -177,8 +177,8 @@
 
 | 方法 | 路径 | 说明 | 权限 |
 | --- | --- | --- | --- |
-| GET | /data/rt | 日内数据 `{metricCodes[],from,to,limit?}` | data:view |
-| GET | /data/day | 日数据 `{metricCodes[],from,to,page?,pageSize?}`（带 page 返回 `{items,total,page,pageSize}`，pageSize≤500） | data:view |
+| GET | /data/rt | 日内数据 `{metricCodes[],from,to,level?,limit?}`；level=normal/warn/danger | data:view |
+| GET | /data/day | 日数据 `{metricCodes[],from,to,level?,page?,pageSize?}`；level=normal/warn/danger/missing（带 page 返回 `{items,total,page,pageSize}`，pageSize≤500） | data:view |
 | GET | /metrics/{code}/trend | 趋势 `{granularity:rt\|day, days:1~400 或 from/to:YYYY-MM-DD（跨度≤400天）}` → 序列+参考线+缺数标记+区间统计 stats(count/max/maxTs/min/minTs/avg)+历史峰谷值 peaks | data:view |
 | POST | /metrics/{code}/peaks/recalc | 手工重算历史峰值/谷值并落地 metric_peak_stat → {metricCode, peaks} | data:correct |
 | POST | /data/corrections | 手工修正 `{metricCode,bizDate,field,newValue,reason}`（原值保留、审计、刷新提示） | data:correct |

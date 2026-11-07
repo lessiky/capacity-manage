@@ -33,11 +33,25 @@ func (c *Calendar) cacheKey(market string, d time.Time) string {
 	return "td:" + market + ":" + d.Format("2006-01-02")
 }
 
+func (c *Calendar) cacheGetInt(ctx context.Context, key string) (int, error) {
+	if c == nil || c.rdb == nil {
+		return 0, redis.Nil
+	}
+	return c.rdb.Get(ctx, key).Int()
+}
+
+func (c *Calendar) cacheSetInt(ctx context.Context, key string, value int, ttl time.Duration) {
+	if c == nil || c.rdb == nil {
+		return
+	}
+	_ = c.rdb.Set(ctx, key, value, ttl).Err()
+}
+
 // IsTradingDay 某日是否交易日（日历缺失时按周末规则兜底）
 func (c *Calendar) IsTradingDay(ctx context.Context, market string, d time.Time) (bool, error) {
 	d = dateOnly(d)
 	key := c.cacheKey(market, d)
-	if v, err := c.rdb.Get(ctx, key).Int(); err == nil {
+	if v, err := c.cacheGetInt(ctx, key); err == nil {
 		return v == 1, nil
 	}
 	var row persistence.TradingDayCalendar
@@ -45,13 +59,13 @@ func (c *Calendar) IsTradingDay(ctx context.Context, market string, d time.Time)
 	if err == gorm.ErrRecordNotFound {
 		// 日历未覆盖: 按周末规则兜底
 		is := d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
-		_ = c.rdb.Set(ctx, key, map[bool]int{true: 1, false: 0}[is], 1*time.Hour).Err()
+		c.cacheSetInt(ctx, key, map[bool]int{true: 1, false: 0}[is], 1*time.Hour)
 		return is, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	_ = c.rdb.Set(ctx, key, map[bool]int{true: 1, false: 0}[row.IsTrading], 24*time.Hour).Err()
+	c.cacheSetInt(ctx, key, map[bool]int{true: 1, false: 0}[row.IsTrading], 24*time.Hour)
 	return row.IsTrading, nil
 }
 
@@ -235,6 +249,9 @@ func (c *Calendar) PrevTriggerOnOrBefore(ctx context.Context, market, windowTime
 
 // InvalidateCache 日历批量变更后失效相关缓存
 func (c *Calendar) InvalidateCache(ctx context.Context, market string, from, to time.Time) {
+	if c == nil || c.rdb == nil {
+		return
+	}
 	for d := dateOnly(from); !d.After(dateOnly(to)); d = d.AddDate(0, 0, 1) {
 		_ = c.rdb.Del(ctx, c.cacheKey(market, d)).Err()
 	}

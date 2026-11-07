@@ -15,6 +15,7 @@ import (
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/chartimg"
 	"capacity-manage/backend/internal/pkg/store"
+	"capacity-manage/backend/internal/tradingday"
 
 	"github.com/jung-kurt/gofpdf"
 	"github.com/xuri/excelize/v2"
@@ -199,6 +200,12 @@ func sortOver(rows []DailyRow) {
 // CollectDaily 采集日报数据。systemCodes 为 nil 表示全部（自动生成/平台管理员），
 // 非 nil 时按数据权限过滤（FR-RPT-14）。
 func CollectDaily(db *gorm.DB, systemCodes []string, bd time.Time) (*DailyData, error) {
+	return collectDailyAsOf(db, systemCodes, bd, time.Now())
+}
+
+// collectDailyAsOf 与 CollectDaily 相同, 但把"未到点"判定的参照时刻显式传入,
+// 便于测试固定时钟; 生产入口使用 time.Now()。
+func collectDailyAsOf(db *gorm.DB, systemCodes []string, bd time.Time, asOf time.Time) (*DailyData, error) {
 	var rows []DailyRow
 	scopeSQL := ""
 	args := []any{bd}
@@ -218,33 +225,69 @@ func CollectDaily(db *gorm.DB, systemCodes []string, bd time.Time) (*DailyData, 
 		return nil, err
 	}
 
-	// 缺数判定: 当日无日数据 且 存在建档早于该业务日的活动采集流程 → missing, 否则 nodata
+	// 缺数判定: 当日无日数据 且 存在建档早于该业务日的活动采集流程 → missing, 否则 nodata。
+	// trading_day + calendar/natural 流程的数据只落在交易日, 非交易日(周末/节假日)
+	// 本就无值, 应记 nodata, 否则周末报表会出现假缺数。
 	metricCodes := make([]string, 0, len(rows))
 	for _, r := range rows {
 		metricCodes = append(metricCodes, r.MetricCode)
 	}
 	dayEnd := bd.AddDate(0, 0, 1)
 	flowBefore := map[string]bool{}
+	// trading_day 流程的业务日由交易日历推导, 需要市场/窗口/口径判定"是否到点"
+	tradingDayFlows := map[string]tradingDayFlow{}
+	tradingDayMarket := map[string]string{}
 	if len(metricCodes) > 0 {
 		var flows []struct {
-			MetricCode string
-			CreatedAt  time.Time
+			MetricCode    string
+			CreatedAt     time.Time
+			ScheduleMode  string
+			BizDateMode   string
+			TradingMarket string
+			WindowTime    string
 		}
 		_ = db.Table("collect_flow").
-			Select("metric_code, created_at").
+			Select("metric_code, created_at, schedule_mode, biz_date_mode, trading_market, window_time").
 			Where("status = 'active' AND metric_code IN ?", metricCodes).
 			Scan(&flows).Error
 		for _, f := range flows {
 			if !f.CreatedAt.After(dayEnd) {
 				flowBefore[f.MetricCode] = true
 			}
+			if f.ScheduleMode != "trading_day" {
+				continue
+			}
+			market := f.TradingMarket
+			if market == "" {
+				market = "SH"
+			}
+			window := f.WindowTime
+			if window == "" {
+				window = "17:30:00"
+			}
+			mode := f.BizDateMode
+			if mode == "" {
+				mode = "natural"
+			}
+			tradingDayFlows[f.MetricCode] = tradingDayFlow{Market: market, WindowTime: window, BizDateMode: mode}
+			// calendar/natural 的日值只落在交易日, 非交易日应判 nodata
+			if mode == "calendar" || mode == "natural" {
+				tradingDayMarket[f.MetricCode] = market
+			}
 		}
 	}
+	nonTrading := nonTradingMarketsForMetrics(db, bd, tradingDayMarket)
+	notDue := notDueMetrics(tradingday.NewCalendar(db, nil, nil), bd, asOf, tradingDayFlows)
 	for i := range rows {
 		if rows[i].StatValue != nil {
 			if rows[i].Level == "" {
 				rows[i].Level = "normal"
 			}
+			continue
+		}
+		if nonTrading[rows[i].MetricCode] || notDue[rows[i].MetricCode] {
+			// 非交易日 / 数据尚未到点: 本就不该有值, 同时覆盖汇总阶段可能已写入的 missing 行
+			rows[i].Level = "nodata"
 			continue
 		}
 		if rows[i].Level == "" || rows[i].Level == "normal" {
@@ -283,6 +326,85 @@ func CollectDaily(db *gorm.DB, systemCodes []string, bd time.Time) (*DailyData, 
 		LegacyLevelMappings: mappings,
 		GeneratedAt:         time.Now(),
 	}, nil
+}
+
+// tradingDayFlow 是日报缺数判定所需的交易日流程口径。
+type tradingDayFlow struct {
+	Market      string
+	WindowTime  string
+	BizDateMode string
+}
+
+// notDueMetrics 按指标判定业务日 bd 是否尚未到点: bd 晚于该流程最近一次已完成
+// 调度所能产出的业务日时, 数据尚不该出现。00:10 日汇总与 00:30 日报按"昨日"
+// 生成, 而 prev_day/calendar 流程要到下一交易日才采集上一业务日的数据, 若不设
+// 此闸门, 每日自动日报会把整个最新业务日误报成缺数(与质量模块 cleanupPremature
+// 同一口径)。
+func notDueMetrics(cal *tradingday.Calendar, bd, asOf time.Time, flows map[string]tradingDayFlow) map[string]bool {
+	out := map[string]bool{}
+	if cal == nil || len(flows) == 0 {
+		return out
+	}
+	ctx := context.Background()
+	type dueResult struct {
+		date  time.Time
+		known bool
+	}
+	cache := map[tradingDayFlow]dueResult{}
+	for metric, fl := range flows {
+		res, cached := cache[fl]
+		if !cached {
+			due, err := latestDueBizDate(ctx, cal, fl, asOf)
+			res = dueResult{date: due, known: err == nil}
+			cache[fl] = res
+		}
+		if res.known && bd.After(res.date) {
+			out[metric] = true
+		}
+	}
+	return out
+}
+
+// latestDueBizDate 返回流程在 asOf 时刻最近一次已完成调度对应的业务日。
+func latestDueBizDate(ctx context.Context, cal *tradingday.Calendar, fl tradingDayFlow, asOf time.Time) (time.Time, error) {
+	lastRun, err := cal.PrevTriggerOnOrBefore(ctx, fl.Market, fl.WindowTime, asOf)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return cal.BizDateForRun(ctx, fl.Market, fl.BizDateMode, lastRun)
+}
+
+// nonTradingMarketsForMetrics 按指标判定业务日 bd 是否为其非交易日。仅对
+// trading_day + calendar/natural 流程有意义(它们的日值只落在交易日); 日历缺行时
+// 按周末规则兜底, 与 QualityService.qualityBizDates 的口径一致。
+func nonTradingMarketsForMetrics(db *gorm.DB, bd time.Time, metricMarket map[string]string) map[string]bool {
+	out := map[string]bool{}
+	if len(metricMarket) == 0 {
+		return out
+	}
+	marketSet := map[string]bool{}
+	for _, market := range metricMarket {
+		marketSet[market] = true
+	}
+	markets := make([]string, 0, len(marketSet))
+	for market := range marketSet {
+		markets = append(markets, market)
+	}
+	trading := map[string]bool{}
+	var cals []persistence.TradingDayCalendar
+	_ = db.Where("market IN ? AND cal_date = ?", markets, bd).Find(&cals).Error
+	for i := range cals {
+		trading[cals[i].Market] = cals[i].IsTrading
+	}
+	weekend := bd.Weekday() == time.Saturday || bd.Weekday() == time.Sunday
+	for metric, market := range metricMarket {
+		isTrading, ok := trading[market]
+		if !ok {
+			isTrading = !weekend
+		}
+		out[metric] = !isTrading
+	}
+	return out
 }
 
 func attachDailyForecast(db *gorm.DB, rows []DailyRow, bd time.Time) error {

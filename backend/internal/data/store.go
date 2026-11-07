@@ -67,10 +67,14 @@ func (s *Store) BackfillJudgeLevel(metricCode string, ts time.Time, level string
 }
 
 // QueryRT 日内数据查询
-func (s *Store) QueryRT(ctx context.Context, metricCodes []string, from, to time.Time, limit int) ([]persistence.MetricValueRT, error) {
+func (s *Store) QueryRT(ctx context.Context, metricCodes []string, from, to time.Time,
+	level string, limit int) ([]persistence.MetricValueRT, error) {
 	q := s.db.Model(&persistence.MetricValueRT{}).Where("ts >= ? AND ts < ?", from, to)
 	if len(metricCodes) > 0 {
 		q = q.Where("metric_code IN ?", metricCodes)
+	}
+	if level != "" {
+		q = q.Where("judge_level = ?", level)
 	}
 	if limit <= 0 {
 		limit = 1000
@@ -81,10 +85,14 @@ func (s *Store) QueryRT(ctx context.Context, metricCodes []string, from, to time
 }
 
 // QueryDay 日数据查询
-func (s *Store) QueryDay(ctx context.Context, metricCodes []string, from, to time.Time) ([]persistence.MetricValueDay, error) {
+func (s *Store) QueryDay(ctx context.Context, metricCodes []string, from, to time.Time,
+	level string) ([]persistence.MetricValueDay, error) {
 	q := s.db.Model(&persistence.MetricValueDay{}).Where("biz_date >= ? AND biz_date < ?", from, to)
 	if len(metricCodes) > 0 {
 		q = q.Where("metric_code IN ?", metricCodes)
+	}
+	if level != "" {
+		q = q.Where("level = ?", level)
 	}
 	var rows []persistence.MetricValueDay
 	err := q.Order("metric_code, biz_date").Find(&rows).Error
@@ -92,10 +100,14 @@ func (s *Store) QueryDay(ctx context.Context, metricCodes []string, from, to tim
 }
 
 // QueryRTPage 日内数据分页查询（page 从 1 开始）
-func (s *Store) QueryRTPage(ctx context.Context, metricCodes []string, from, to time.Time, page, pageSize int) ([]persistence.MetricValueRT, int64, error) {
+func (s *Store) QueryRTPage(ctx context.Context, metricCodes []string, from, to time.Time,
+	level string, page, pageSize int) ([]persistence.MetricValueRT, int64, error) {
 	q := s.db.Model(&persistence.MetricValueRT{}).Where("ts >= ? AND ts < ?", from, to)
 	if len(metricCodes) > 0 {
 		q = q.Where("metric_code IN ?", metricCodes)
+	}
+	if level != "" {
+		q = q.Where("judge_level = ?", level)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -107,10 +119,14 @@ func (s *Store) QueryRTPage(ctx context.Context, metricCodes []string, from, to 
 }
 
 // QueryDayPage 日数据分页查询（page 从 1 开始）
-func (s *Store) QueryDayPage(ctx context.Context, metricCodes []string, from, to time.Time, page, pageSize int) ([]persistence.MetricValueDay, int64, error) {
+func (s *Store) QueryDayPage(ctx context.Context, metricCodes []string, from, to time.Time,
+	level string, page, pageSize int) ([]persistence.MetricValueDay, int64, error) {
 	q := s.db.Model(&persistence.MetricValueDay{}).Where("biz_date >= ? AND biz_date < ?", from, to)
 	if len(metricCodes) > 0 {
 		q = q.Where("metric_code IN ?", metricCodes)
+	}
+	if level != "" {
+		q = q.Where("level = ?", level)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

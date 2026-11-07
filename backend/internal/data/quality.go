@@ -10,6 +10,7 @@ import (
 	"capacity-manage/backend/internal/persistence"
 	"capacity-manage/backend/internal/pkg/clock"
 	"capacity-manage/backend/internal/system"
+	"capacity-manage/backend/internal/tradingday"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -67,7 +68,8 @@ func CalculateQuality(in QualityInput) QualityResult {
 	}
 	score = roundQuality(score)
 
-	var flags []string
+	// 初始化空切片, 保证无告警时序列化为 "[]" 而非 "null"。
+	flags := make([]string, 0, 6)
 	if in.TotalPoints == 0 || in.ValidDays == 0 {
 		flags = append(flags, "no_data")
 	}
@@ -98,10 +100,36 @@ func CalculateQuality(in QualityInput) QualityResult {
 type QualityService struct {
 	db     *gorm.DB
 	params *system.Params
+	cal    *tradingday.Calendar
+	now    func() time.Time
 }
 
-func NewQualityService(db *gorm.DB, params *system.Params) *QualityService {
-	return &QualityService{db: db, params: params}
+func NewQualityService(db *gorm.DB, params *system.Params, cals ...*tradingday.Calendar) *QualityService {
+	svc := &QualityService{db: db, params: params, now: time.Now}
+	if len(cals) > 0 && cals[0] != nil {
+		svc.cal = cals[0]
+	}
+	return svc
+}
+
+func (s *QualityService) currentTime() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s *QualityService) calendar() *tradingday.Calendar {
+	if s == nil {
+		return nil
+	}
+	if s.cal != nil {
+		return s.cal
+	}
+	if s.db == nil {
+		return nil
+	}
+	return tradingday.NewCalendar(s.db, nil, s.params)
 }
 
 // Evaluate calculates and upserts one quality row per inclusive business day.
@@ -110,8 +138,16 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 	if err := s.db.WithContext(ctx).Where("metric_code = ?", metricCode).First(&metric).Error; err != nil {
 		return QualityResult{}, err
 	}
+	flow, err := s.activeFlow(ctx, metricCode)
+	if err != nil {
+		return QualityResult{}, err
+	}
+	asOf := s.currentTime()
+	if err := s.CleanupPremature(ctx, asOf, metricCode); err != nil {
+		return QualityResult{}, err
+	}
 	start, end := normalizeRange(from, to)
-	bizDates, err := s.qualityBizDates(ctx, metricCode, start, end)
+	bizDates, err := s.qualityBizDates(ctx, flow, start, end, asOf)
 	if err != nil {
 		return QualityResult{}, err
 	}
@@ -132,7 +168,7 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 	}
 
 	for _, bizDate := range bizDates {
-		day, err := s.evaluateDay(ctx, &metric, bizDate, timelyHours)
+		day, err := s.evaluateDay(ctx, &metric, flow, bizDate, timelyHours)
 		if err != nil {
 			return QualityResult{}, err
 		}
@@ -169,21 +205,28 @@ func (s *QualityService) Evaluate(ctx context.Context, metricCode string, from, 
 	return result, nil
 }
 
-func (s *QualityService) qualityBizDates(ctx context.Context, metricCode string, start, end time.Time) ([]time.Time, error) {
+func (s *QualityService) activeFlow(ctx context.Context, metricCode string) (*persistence.CollectFlow, error) {
+	var flow persistence.CollectFlow
+	err := s.db.WithContext(ctx).
+		Where("metric_code = ? AND status = ? AND enabled = ?", metricCode, "active", true).
+		Order("id").First(&flow).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &flow, nil
+}
+
+func (s *QualityService) qualityBizDates(ctx context.Context, flow *persistence.CollectFlow,
+	start, end, asOf time.Time) ([]time.Time, error) {
 	naturalDates := make([]time.Time, 0, daysBetween(start, end))
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		naturalDates = append(naturalDates, d)
 	}
 
-	var flow persistence.CollectFlow
-	err := s.db.WithContext(ctx).Where("metric_code = ?", metricCode).First(&flow).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return naturalDates, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if flow.ScheduleMode != "trading_day" {
+	if flow == nil || flow.ScheduleMode != "trading_day" {
 		return naturalDates, nil
 	}
 	mode := flow.BizDateMode
@@ -219,11 +262,131 @@ func (s *QualityService) qualityBizDates(ctx context.Context, metricCode string,
 			out = append(out, d)
 		}
 	}
+	due, dueKnown, err := s.latestDueBizDate(ctx, flow, asOf)
+	if err != nil {
+		return nil, err
+	}
+	if dueKnown {
+		filtered := out[:0]
+		for _, d := range out {
+			if d.After(due) {
+				continue
+			}
+			if !flow.CreatedAt.IsZero() && flow.CreatedAt.After(d) {
+				continue
+			}
+			filtered = append(filtered, d)
+		}
+		out = filtered
+	}
 	return out, nil
 }
 
+func (s *QualityService) latestDueBizDate(ctx context.Context, flow *persistence.CollectFlow,
+	asOf time.Time) (time.Time, bool, error) {
+	if flow == nil || flow.ScheduleMode != "trading_day" {
+		return time.Time{}, false, nil
+	}
+	cal := s.calendar()
+	if cal == nil {
+		return time.Time{}, false, nil
+	}
+	market := flow.TradingMarket
+	if market == "" {
+		market = "SH"
+	}
+	window := flow.WindowTime
+	if window == "" {
+		window = "17:30:00"
+	}
+	lastRun, err := cal.PrevTriggerOnOrBefore(ctx, market, window, asOf)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	bizDate, err := cal.BizDateForRun(ctx, market, flow.BizDateMode, lastRun)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return bizDate, true, nil
+}
+
+func (s *QualityService) scheduledRunForBizDate(ctx context.Context, flow *persistence.CollectFlow,
+	bizDate time.Time) (time.Time, bool, error) {
+	if flow == nil || flow.ScheduleMode != "trading_day" {
+		return time.Time{}, false, nil
+	}
+	cal := s.calendar()
+	if cal == nil {
+		return time.Time{}, false, nil
+	}
+	market := flow.TradingMarket
+	if market == "" {
+		market = "SH"
+	}
+	window := flow.WindowTime
+	if window == "" {
+		window = "17:30:00"
+	}
+	from := clock.DayStart(bizDate).Add(-time.Nanosecond)
+	if flow.BizDateMode == "prev_day" || flow.BizDateMode == "calendar" {
+		from = clock.DayStart(bizDate).AddDate(0, 0, 1).Add(-time.Nanosecond)
+	}
+	run, err := cal.NextTriggerAfter(ctx, market, window, from)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return run, true, nil
+}
+
+// CleanupPremature removes no-data quality rows for business dates whose
+// scheduled collection window has not completed yet. Without this guard a
+// 00:15 previous-day flow can be scored on Saturday for Friday even though
+// Friday's data is not collected until the next trading-day run.
+func (s *QualityService) CleanupPremature(ctx context.Context, asOf time.Time, metricCodes ...string) error {
+	var rows []persistence.MetricQualityDay
+	q := s.db.WithContext(ctx).Where("valid_points <= 0 AND total_points <= 0")
+	if len(metricCodes) > 0 {
+		q = q.Where("metric_code IN ?", metricCodes)
+	}
+	if err := q.Find(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	var flows []persistence.CollectFlow
+	if err := s.db.WithContext(ctx).
+		Where("status = ? AND enabled = ? AND schedule_mode = ?", "active", true, "trading_day").
+		Order("id").
+		Find(&flows).Error; err != nil {
+		return err
+	}
+	flowByMetric := make(map[string]*persistence.CollectFlow, len(flows))
+	for i := range flows {
+		if _, ok := flowByMetric[flows[i].MetricCode]; !ok {
+			flowByMetric[flows[i].MetricCode] = &flows[i]
+		}
+	}
+	for i := range rows {
+		flow := flowByMetric[rows[i].MetricCode]
+		if flow == nil {
+			continue
+		}
+		due, known, err := s.latestDueBizDate(ctx, flow, asOf)
+		if err != nil || !known || !rows[i].BizDate.After(due) {
+			continue
+		}
+		if err := s.db.WithContext(ctx).
+			Where("metric_code = ? AND biz_date = ?", rows[i].MetricCode, rows[i].BizDate).
+			Delete(&persistence.MetricQualityDay{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *QualityService) evaluateDay(ctx context.Context, metric *persistence.CapacityMetric,
-	bizDate time.Time, timelyHours int) (persistence.MetricQualityDay, error) {
+	flow *persistence.CollectFlow, bizDate time.Time, timelyHours int) (persistence.MetricQualityDay, error) {
 	dayStart := clock.DayStart(bizDate)
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	type rtRow struct {
@@ -278,8 +441,13 @@ func (s *QualityService) evaluateDay(ctx context.Context, metric *persistence.Ca
 	timely := 0.0
 	if valid > 0 && !firstAt.IsZero() {
 		// prev_day/calendar 流程会在业务日之后的凌晨采集, 因此及时性窗口
-		// 从业务日结束时刻起算, 而不是从业务日 00:00 起算。
+		// 从该业务日对应的计划触发时刻起算, 跨周末也按下一交易日计算。
 		deadline := dayEnd.Add(time.Duration(timelyHours) * time.Hour)
+		if run, known, err := s.scheduledRunForBizDate(ctx, flow, bizDate); err != nil {
+			return persistence.MetricQualityDay{}, err
+		} else if known {
+			deadline = run.Add(time.Duration(timelyHours) * time.Hour)
+		}
 		if !firstAt.After(deadline) {
 			timely = 1
 		}

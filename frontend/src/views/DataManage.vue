@@ -15,6 +15,12 @@
           </el-select>
           <el-date-picker v-model="dayQ.range" type="daterange" value-format="YYYY-MM-DD"
             start-placeholder="开始日期" end-placeholder="结束日期" style="width: 240px" />
+          <el-select v-model="dayQ.level" clearable placeholder="级别" style="width: 120px">
+            <el-option label="正常" value="normal" />
+            <el-option label="预警" value="warn" />
+            <el-option label="危险" value="danger" />
+            <el-option label="缺数" value="missing" />
+          </el-select>
           <el-button type="primary" :icon="Search" @click="searchDay">查询</el-button>
         </div>
         <el-table :data="dayRows" v-loading="dayLoading" border stripe size="default">
@@ -68,6 +74,11 @@
           </el-select>
           <el-date-picker v-model="rtQ.range" type="daterange" value-format="YYYY-MM-DD"
             start-placeholder="开始日期" end-placeholder="结束日期" style="width: 240px" />
+          <el-select v-model="rtQ.level" clearable placeholder="判定" style="width: 120px">
+            <el-option label="正常" value="normal" />
+            <el-option label="预警" value="warn" />
+            <el-option label="危险" value="danger" />
+          </el-select>
           <el-button type="primary" :icon="Search" @click="searchRt">查询</el-button>
         </div>
         <el-table :data="rtRows" v-loading="rtLoading" border stripe size="default">
@@ -142,6 +153,15 @@
           </el-select>
           <el-date-picker v-model="qualityQ.range" type="daterange" value-format="YYYY-MM-DD"
             start-placeholder="开始日期" end-placeholder="结束日期" style="width: 240px" />
+          <el-select v-model="qualityQ.flag" clearable placeholder="质量标记" style="width: 150px">
+            <el-option label="正常" value="normal" />
+            <el-option label="无数据" value="no_data" />
+            <el-option label="缺天" value="missing_days" />
+            <el-option label="不及时" value="late_days" />
+            <el-option label="异常偏高" value="anomaly_ratio" />
+            <el-option label="重复值" value="duplicates" />
+            <el-option label="数据陈旧" value="stale" />
+          </el-select>
           <el-button type="primary" :icon="Search" @click="searchQuality">查询</el-button>
           <el-button :loading="qualityEvaluating" @click="evaluateQuality">重新评分</el-button>
         </div>
@@ -293,7 +313,7 @@ async function loadFlows() {
 const dayRows = ref<Record<string, any>[]>([])
 const dayTotal = ref(0)
 const dayLoading = ref(false)
-const dayQ = reactive<{ metricCode: string; range: string[] | null; page: number; pageSize: number }>({ metricCode: '', range: null, page: 1, pageSize: 100 })
+const dayQ = reactive<{ metricCode: string; range: string[] | null; level: string; page: number; pageSize: number }>({ metricCode: '', range: null, level: '', page: 1, pageSize: 100 })
 
 function defaultRange(): string[] {
   const to = new Date(), from = new Date()
@@ -308,6 +328,7 @@ async function loadDay() {
     const params: Record<string, unknown> = { page: dayQ.page, pageSize: dayQ.pageSize }
     if (dayQ.metricCode) params.metricCodes = dayQ.metricCode
     if (dayQ.range?.length === 2) { params.from = dayQ.range[0]; params.to = dayQ.range[1] }
+    if (dayQ.level) params.level = dayQ.level
     const res = (await http.get('/api/v1/data/day', { params })) as unknown as { items: Record<string, any>[]; total: number }
     dayRows.value = res?.items ?? []
     dayTotal.value = res?.total ?? 0
@@ -370,7 +391,7 @@ function showCorrection(row: Record<string, any>) {
 const rtRows = ref<Record<string, any>[]>([])
 const rtLoading = ref(false)
 const rtTotal = ref(0)
-const rtQ = reactive<{ metricCode: string; range: string[] | null; page: number; pageSize: number }>({ metricCode: '', range: null, page: 1, pageSize: 100 })
+const rtQ = reactive<{ metricCode: string; range: string[] | null; level: string; page: number; pageSize: number }>({ metricCode: '', range: null, level: '', page: 1, pageSize: 100 })
 
 async function loadRt() {
   rtLoading.value = true
@@ -378,6 +399,7 @@ async function loadRt() {
     const params: Record<string, unknown> = { page: rtQ.page, pageSize: rtQ.pageSize }
     if (rtQ.metricCode) params.metricCodes = rtQ.metricCode
     if (rtQ.range?.length === 2) { params.from = rtQ.range[0]; params.to = rtQ.range[1] }
+    if (rtQ.level) params.level = rtQ.level
     const res = (await http.get('/api/v1/data/rt', { params })) as unknown as { items: Record<string, any>[]; total: number }
     rtRows.value = res?.items ?? []
     rtTotal.value = res?.total ?? 0
@@ -417,8 +439,8 @@ const qualityRows = ref<Record<string, any>[]>([])
 const qualityLoading = ref(false)
 const qualityEvaluating = ref(false)
 const qualityTotal = ref(0)
-const qualityQ = reactive<{ metricCode: string; range: string[] | null; page: number; pageSize: number }>({
-  metricCode: '', range: null, page: 1, pageSize: 100,
+const qualityQ = reactive<{ metricCode: string; range: string[] | null; flag: string; page: number; pageSize: number }>({
+  metricCode: '', range: null, flag: '', page: 1, pageSize: 100,
 })
 
 async function loadQuality() {
@@ -427,6 +449,7 @@ async function loadQuality() {
     const params: Record<string, unknown> = { page: qualityQ.page, pageSize: qualityQ.pageSize }
     if (qualityQ.metricCode) params.metricCode = qualityQ.metricCode
     if (qualityQ.range?.length === 2) { params.from = qualityQ.range[0]; params.to = qualityQ.range[1] }
+    if (qualityQ.flag) params.flag = qualityQ.flag
     const data = (await http.get('/api/v1/data/quality', { params })) as unknown as
       | { items: Record<string, any>[]; total: number }
       | Record<string, any>[]

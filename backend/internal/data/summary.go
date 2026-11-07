@@ -81,6 +81,11 @@ func RunDailyQuality(ctx context.Context, db *gorm.DB, params *system.Params, lo
 		return
 	}
 	service := NewQualityService(db, params)
+	if err := service.CleanupPremature(ctx, time.Now()); err != nil {
+		if log != nil {
+			log.Warn("daily quality premature cleanup failed", slog.Any("err", err))
+		}
+	}
 	for i := range metrics {
 		if _, err := service.Evaluate(ctx, metrics[i].MetricCode, bizDate, bizDate); err != nil {
 			if log != nil {
