@@ -687,6 +687,16 @@ func (h *TaskHandler) List(c *gin.Context) {
 	if v := c.Query("flowId"); v != "" {
 		q = q.Where("flow_id = ?", v)
 	}
+	if v := strings.TrimSpace(c.Query("flowCode")); v != "" {
+		q = q.Where("collect_task_log.flow_code = ?", v)
+	}
+	if v := strings.TrimSpace(c.Query("metricCode")); v != "" {
+		q = q.Where("collect_task_log.metric_code = ?", v)
+	}
+	if v := strings.TrimSpace(c.Query("keyword")); v != "" {
+		like := "%" + v + "%"
+		q = q.Where("collect_task_log.flow_code LIKE ? OR collect_task_log.metric_code LIKE ?", like, like)
+	}
 	if v := c.Query("status"); v != "" {
 		q = q.Where("status = ?", v)
 	}

@@ -18,7 +18,11 @@ ENV FILE_ROOT=/app/data/files \
     WORKER_PORT=9100 \
     WORKER_WORK_ROOT=/tmp/capworker \
     PYTHONDONTWRITEBYTECODE=1
-RUN mkdir -p /app/data/files /tmp/capworker
+# iputils-ping 提供 ping, telnet 提供 telnet 客户端, 便于生产网络排障
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iputils-ping telnet \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/data/files /tmp/capworker
 EXPOSE 8080 9100
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)" || exit 1

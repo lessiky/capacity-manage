@@ -166,7 +166,7 @@ const { items, total, loading, error, page, pageSize, reload, params } = useList
 
 function applyFilter() {
   params.value = {
-    ...(filterFlow.value ? { flowCode: filterFlow.value } : {}),
+    ...(filterFlow.value ? { keyword: filterFlow.value } : {}),
     ...(filterStatus.value ? { status: filterStatus.value } : {}),
     ...(filterSource.value ? { source: filterSource.value } : {}),
     ...(filterDate.value ? { date: filterDate.value } : {}),
